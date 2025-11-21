@@ -110,88 +110,91 @@ class UniformAffineQuantizer(FakeQuantizer):
         dequant = (value_q - zero_point) * scale
         return dequant
 
-
 class LearnableStepSizeQuantizer(FakeQuantizer):
-    """Implementation of LSQ-style learnable step size quantization."""
-
     def __init__(
         self,
         bits: int,
-        per_channel: bool,
+        per_channel: bool = False,
         symmetric: bool = True,
         channel_axis: int = 0,
         alpha_init: float = 6.0,
     ) -> None:
         super().__init__(bits, symmetric=symmetric, per_channel=per_channel, channel_axis=channel_axis)
         self.alpha_init = alpha_init
-        self.scale_param: Optional[nn.Parameter] = None
-        self.register_buffer("grad_multiplier", torch.tensor(1.0), persistent=False)
-        self._hook_registered = False
+        self.scale: Optional[nn.Parameter] = None
+
+    def init_scale_param(self, num_channels: int = 1) -> None:
+        """Инициализирует параметр scale с правильной формой. Вызывается один раз."""
+        if isinstance(self.scale, nn.Parameter):
+            return
+        if hasattr(self, "scale"):
+            try:
+                delattr(self, "scale")
+            except Exception:
+                pass
+        shape = (num_channels,) if self.per_channel else (1,)
+        p = nn.Parameter(torch.ones(shape, dtype=torch.float32))
+        self.register_parameter("scale", p)
+        self.scale = p
 
     def initialize_from_tensor(self, tensor: Tensor) -> None:
+        """Выполняет инициализацию значения scale по статистике тензора."""
+        if bool(self.initialized):
+            return
+        if self.scale is None:
+            raise RuntimeError("scale not initialized. Call init_scale_param first.")
+
         axis = self.channel_axis if self.channel_axis >= 0 else tensor.ndim + self.channel_axis
+        reduce_dims = tuple(i for i in range(tensor.ndim) if i != axis) if self.per_channel else tuple(range(tensor.ndim))
+
+        mean_abs = tensor.detach().abs()
+        if reduce_dims:
+            mean_abs = mean_abs.mean(dim=reduce_dims, keepdim=False)
+        else:
+            mean_abs = mean_abs.mean()
+
+        # s = α * mean(|x|) / sqrt(Q_max)
+        scale_val = self.alpha_init * mean_abs / (self.qmax ** 0.5 + 1e-6)
+        scale_val = torch.clamp(scale_val, min=1e-6)
+
         if self.per_channel:
-            dims = tuple(i for i in range(tensor.ndim) if i != axis)
-            scale = tensor.detach().abs().mean(dim=dims, keepdim=False)
+            # scale_val shape должен совпадать с self.scale
+            self.scale.data.copy_(scale_val.detach().to(self.scale.dtype))
         else:
-            scale = tensor.detach().abs().mean()
-        if self.alpha_init is not None:
-            scale = scale * float(self.alpha_init)
-        scale = scale / math.sqrt(self.qmax)
-        scale = scale.to(tensor.device)
-        if self.scale_param is None:
-            if self.per_channel:
-                initial = scale.reshape(-1).clone()
-            else:
-                initial = scale.reshape(1).clone()
-            self.scale_param = nn.Parameter(initial)
-            self.register_parameter("scale", self.scale_param)
-        else:
-            target = scale.reshape_as(self.scale_param)
-            self.scale_param.data.copy_(target)
+            self.scale.data.fill_(float(scale_val.item()))
 
-        grad_scale = self._compute_grad_multiplier(tensor)
-        self.grad_multiplier = grad_scale
-        if not self._hook_registered and self.scale_param is not None:
-            def _hook(grad: Tensor) -> Tensor:
-                multiplier = self.grad_multiplier.to(grad.device)
-                return grad * multiplier
+        self.initialized.fill_(True)
 
-            self.scale_param.register_hook(_hook)
-            self._hook_registered = True
+        if not hasattr(self.scale, "_lsq_hook"):
+            def grad_scale_hook(grad):
+                # используем float/scalar вычисления, возвращаем grad * множитель
+                if self.per_channel:
+                    # n — количество элементов на канал
+                    n = tensor.numel() // tensor.shape[axis]
+                else:
+                    n = tensor.numel()
+                g = 1.0 / math.sqrt(max(n * float(self.qmax), 1.0))
+                # возвращаем grad * g (broadcast по каналу/скаляру)
+                return grad * g
+            self.scale.register_hook(grad_scale_hook)
+            self.scale._lsq_hook = True
 
     def _forward_impl(self, tensor: Tensor) -> Tensor:
-        if self.scale_param is None:
-            raise RuntimeError("LearnableStepSizeQuantizer not initialized.")
-        scale = self.scale_param.abs()
+        if self.scale is None:
+            raise RuntimeError("scale not initialized. Call init_scale_param and initialize_from_tensor first.")
+
+        scale = self.scale.abs().clamp(min=1e-6)
+
         if self.per_channel:
             view_shape = [1] * tensor.ndim
             axis = self.channel_axis if self.channel_axis >= 0 else tensor.ndim + self.channel_axis
             view_shape[axis] = -1
             scale = scale.view(*view_shape)
-        value = tensor / scale
-        q = torch.clamp(torch.round(value), self.qmin, self.qmax)
-        value_q = value + (q - value).detach()
-        dequant = value_q * scale
-        return dequant
 
-    def _compute_grad_multiplier(self, tensor: Tensor) -> Tensor:
-        tensor = tensor.detach()
-        if self.per_channel:
-            axis = self.channel_axis if self.channel_axis >= 0 else tensor.ndim + self.channel_axis
-            permute_order = [axis] + [i for i in range(tensor.ndim) if i != axis]
-            flattened = tensor.permute(permute_order).reshape(tensor.shape[axis], -1)
-            numel = flattened.size(1)
-            scale = 1.0 / math.sqrt(max(numel, 1) * self.qmax)
-            grad_scale = tensor.new_full((tensor.shape[axis],), scale)
-        else:
-            numel = tensor.numel()
-            scale = 1.0 / math.sqrt(max(numel, 1) * self.qmax)
-            grad_scale = tensor.new_full((1,), scale)
-        grad_scale = grad_scale.reshape(-1)
-        if self.scale_param is not None:
-            grad_scale = grad_scale.reshape_as(self.scale_param)
-        return grad_scale
+        x_scaled = tensor / scale
+        x_q = torch.clamp(torch.round(x_scaled), self.qmin, self.qmax)
+        x_q_ste = x_scaled + (x_q - x_scaled).detach()
+        return x_q_ste * scale
 
 
 class QuantLinear(nn.Linear):
@@ -343,8 +346,6 @@ class QuantStrategy(metaclass=abc.ABCMeta):
         self.quantize_embedding = config.get("quantize_embedding", False)
         self.handles: List[Tuple[str, nn.Module]] = []
         self.model: Optional[nn.Module] = None
-        # Optional experiment logger (e.g. ClearML Task logger)
-        # Set via ``set_logger`` from training scripts.
         self.logger: Any = None
 
     def attach(self, model: nn.Module) -> nn.Module:
@@ -362,7 +363,6 @@ class QuantStrategy(metaclass=abc.ABCMeta):
     def _wrap_module(self, name: str, module: nn.Module) -> Optional[nn.Module]:
         """Wrap a module with fake-quant operations."""
 
-    # --- Optional logging helpers -------------------------------------------------
     def set_logger(self, logger: Any) -> None:
         """Attach an experiment logger (ClearML, WandB, etc.)."""
         self.logger = logger
@@ -411,8 +411,14 @@ class QATQuantStrategy(QuantStrategy):
             wq = self.create_weight_quantizer(name, module)
             aq = self.create_activation_quantizer(name, module)
             with torch.no_grad():
+                if hasattr(wq, "init_scale_param"):
+                    num_channels = module.weight.shape[0] if getattr(wq, "per_channel", False) else 1
+                    wq.init_scale_param(num_channels)
                 wq.initialize_from_tensor(module.weight.data)
                 wq.initialized.fill_(True)
+                if aq is not None and hasattr(aq, "init_scale_param"):
+                    act_channels = module.out_channels if getattr(aq, "per_channel", False) else 1
+                    aq.init_scale_param(act_channels)
             device = module.weight.device
             wq.to(device)
             if aq is not None:
@@ -422,8 +428,14 @@ class QATQuantStrategy(QuantStrategy):
             wq = self.create_weight_quantizer(name, module)
             aq = self.create_activation_quantizer(name, module)
             with torch.no_grad():
+                if hasattr(wq, "init_scale_param"):
+                    num_channels = module.weight.shape[0] if getattr(wq, "per_channel", False) else 1
+                    wq.init_scale_param(num_channels)
                 wq.initialize_from_tensor(module.weight.data)
                 wq.initialized.fill_(True)
+                if aq is not None and hasattr(aq, "init_scale_param"):
+                    act_channels = module.out_channels if getattr(aq, "per_channel", False) else 1
+                    aq.init_scale_param(act_channels)
             device = module.weight.device
             wq.to(device)
             if aq is not None:
@@ -433,8 +445,14 @@ class QATQuantStrategy(QuantStrategy):
             wq = self.create_weight_quantizer(name, module)
             aq = self.create_activation_quantizer(name, module)
             with torch.no_grad():
+                if hasattr(wq, "init_scale_param"):
+                    num_channels = module.weight.shape[0] if getattr(wq, "per_channel", False) else 1
+                    wq.init_scale_param(num_channels)
                 wq.initialize_from_tensor(module.weight.data)
                 wq.initialized.fill_(True)
+                if aq is not None and hasattr(aq, "init_scale_param"):
+                    act_channels = module.out_features if getattr(aq, "per_channel", False) else 1
+                    aq.init_scale_param(act_channels)
             device = module.weight.device
             wq.to(device)
             if aq is not None:
@@ -443,6 +461,9 @@ class QATQuantStrategy(QuantStrategy):
         if isinstance(module, nn.Embedding) and self.quantize_embedding:
             wq = self.create_weight_quantizer(name, module)
             with torch.no_grad():
+                if hasattr(wq, "init_scale_param"):
+                    num_channels = module.weight.shape[0] if getattr(wq, "per_channel", False) else 1
+                    wq.init_scale_param(num_channels)
                 wq.initialize_from_tensor(module.weight.data)
                 wq.initialized.fill_(True)
             device = module.weight.device
