@@ -57,14 +57,12 @@ def benchmark_cpu_latency(
     device = torch.device("cpu")
     model.eval().to(device)
 
-    # Collect a small list of inputs
     inputs: List[torch.Tensor] = []
     for batch in loader:
         inputs.append(batch["lr"].to(device))
     if not inputs:
         return {"throughput_samples_per_sec": 0.0, "avg_latency_ms": 0.0, "median_latency_ms": 0.0}
 
-    # Warmup
     for _ in range(warmup):
         for x in inputs[:2]:
             _ = model(x)

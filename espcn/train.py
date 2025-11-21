@@ -453,7 +453,7 @@ def main() -> None:
         raise ValueError(f"Unknown quantization method: {strategy_name}")
 
     val_loss, test_psnr, test_ssim = validate(
-        model, test_loader, device, criterion=criterion, logger=logger, epoch=999
+        model, test_loader, device, criterion=criterion, logger=None, epoch=999
     )
     if isinstance(test_psnr, torch.Tensor):
         test_psnr = test_psnr.item()
@@ -463,7 +463,6 @@ def main() -> None:
     test_metrics = {"psnr": test_psnr, "ssim": test_ssim}
     print("Final test metrics:", json.dumps(test_metrics, indent=2))
 
-    # Save final results for ESPCN into results/espcn_results/<config_name>_results.json
     config_path = config.get("_metadata", {}).get("loaded_from")
     if config_path:
         config_stem = Path(config_path).stem
