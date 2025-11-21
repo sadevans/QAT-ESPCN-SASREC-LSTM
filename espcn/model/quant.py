@@ -41,12 +41,12 @@ class QuantESPCN(BaseESPCN):
         else:
             raise ValueError(f"Unknown strategy: {strategy_name}")
 
-        # Attach strategy directly to self (modifies the model in-place)
+        # attach strategy directly to self (modifies the model in-place)
         self.quant_strategy.attach(self)
         print(f"Quantization strategy attached:\n{self.quant_strategy}")
 
     def forward(self, x: Tensor) -> Tensor:
-        # Always use base forward - quantization is applied in-place via strategy
+        # always use base forward - quantization is applied in-place via strategy
         return super().forward(x)
 
     def calibrate(self, dataloader):
@@ -61,5 +61,5 @@ class QuantESPCN(BaseESPCN):
         self.quant_enabled = True
 
     def state_dict(self, *args, **kwargs):
-        # Return base model state - quantization parameters are included in the model
+        # return base model state - quantization parameters are included in the model
         return super().state_dict(*args, **kwargs)
