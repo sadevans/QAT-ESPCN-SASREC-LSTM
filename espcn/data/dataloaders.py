@@ -1,8 +1,10 @@
-import torch
-from torch.utils.data import DataLoader
-from .datasets import DIV2KTrainDataset, SRBenchmarkDataset
 import random
 from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader
+
+from .datasets import DIV2KTrainDataset, SRBenchmarkDataset
 
 
 def get_train_loader(config):
