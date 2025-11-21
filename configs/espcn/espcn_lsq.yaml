@@ -1,0 +1,8 @@
+base_config: ./base.yaml
+experiment:
+  name: espcn_lsq
+
+quantization:
+  method: lsq
+  bits: 8
+  activation_bits: 8

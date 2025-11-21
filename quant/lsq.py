@@ -1,5 +1,3 @@
-"""Learned Step Size Quantization strategy."""
-
 from __future__ import annotations
 
 from typing import Any, Dict

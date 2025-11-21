@@ -1,0 +1,12 @@
+base_config: ./base.yaml
+experiment:
+  name: espcn_apot
+quantization:
+  method: apot
+  bits: 8
+  activation_bits: 8
+  per_channel: true
+  apot_k: 1
+  weight_init_alpha: 2.0
+  act_init_alpha: 6.0
+  use_weight_norm: true

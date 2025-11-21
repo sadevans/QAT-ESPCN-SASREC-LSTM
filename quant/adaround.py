@@ -7,60 +7,31 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from utils import gather_quantizable_layers, move_batch_to_device, replace_module
+from utils import (gather_quantizable_layers, move_batch_to_device,
+                   replace_module)
+
 from .base import QuantStrategy
 
 
-class AdaRoundConv2d(nn.Conv2d):
-    """Conv2d layer wrapper implementing AdaRound soft rounding using PTQ-style scale."""
-
-    def __init__(self, original: nn.Conv2d, bits: int = 8, per_channel: bool = True) -> None:
-        super().__init__(
-            in_channels=original.in_channels,
-            out_channels=original.out_channels,
-            kernel_size=original.kernel_size,
-            stride=original.stride,
-            padding=original.padding,
-            dilation=original.dilation,
-            groups=original.groups,
-            bias=original.bias is not None,
-            padding_mode=original.padding_mode,
-        )
+class AdaRoundModule(nn.Module):
+    """Base class for AdaRound modules to share common logic."""
+    def __init__(self, bits: int = 8, per_channel: bool = True, ch_axis: int = 0):
+        super().__init__()
         self.bits = bits
-        self.Q = 2 ** (bits - 1) - 1  # signed symmetric quantization
+        self.Q = 2 ** (bits - 1) - 1
         self.per_channel = per_channel
-        self.ch_axis = 0  # output channels: weight shape is [out_ch, in_ch, kH, kW]
-
-        # Store original parameters (frozen)
-        self.weight_fp = nn.Parameter(original.weight.detach().clone(), requires_grad=False)
-        if original.bias is not None:
-            self.bias = nn.Parameter(original.bias.detach().clone(), requires_grad=False)
-        else:
-            self.bias = None
-
-        # Learnable rounding parameter
+        self.ch_axis = ch_axis
+        
         self.alpha: Optional[nn.Parameter] = None
-
-        # Fixed scale (PTQ-style, no grad)
-        self.register_buffer("s", torch.zeros(1))  # will be resized
+        self.register_buffer("s", torch.zeros(1))
         self.register_buffer("initialized", torch.tensor(False))
         self.register_buffer("alpha_init", torch.tensor(False))
-
-        # Control hard vs soft rounding
         self.hard_round_in_eval = True
-
-        # Conv properties
-        self.stride = original.stride
-        self.padding = original.padding
-        self.dilation = original.dilation
-        self.groups = original.groups
-
-        # Initialize scale immediately
-        self._init_scale(self.weight_fp)
 
     @torch.no_grad()
     def _init_scale(self, w: Tensor) -> None:
         if self.per_channel:
+            # Flatten all dimensions except channel axis
             w_perm = w.transpose(0, self.ch_axis).contiguous().flatten(1)
             s = (w_perm.abs().max(dim=1).values / max(self.Q, 1)).clamp(min=1e-8)
         else:
@@ -73,8 +44,7 @@ class AdaRoundConv2d(nn.Conv2d):
         s_b = self._broadcast(w, self.s)
         y = (w / s_b).detach()
         k = torch.floor(y)
-        f = (y - k).clamp(1e-6, 1 - 1e-6)  # avoid log(0) or log(inf)
-
+        f = (y - k).clamp(1e-6, 1 - 1e-6)
         alpha = torch.log(f / (1.0 - f))
         self.alpha = nn.Parameter(alpha.to(dtype=w.dtype, device=w.device))
         self.alpha_init.fill_(True)
@@ -86,11 +56,10 @@ class AdaRoundConv2d(nn.Conv2d):
         view[self.ch_axis] = -1
         return t.view(view)
 
-    def forward(self, input: Tensor) -> Tensor:
+    def get_quantized_weight(self, w: Tensor) -> Tensor:
         if self.alpha is None or not bool(self.alpha_init):
-            self._init_alpha(self.weight_fp)
+            self._init_alpha(w)
 
-        w = self.weight_fp
         s_b = self._broadcast(w, self.s.to(w.device, w.dtype))
         y = w / s_b
         k = torch.floor(y)
@@ -103,35 +72,83 @@ class AdaRoundConv2d(nn.Conv2d):
 
         z = k + r
         z_clamped = z.clamp(-self.Q, self.Q)
-
-        # Straight-through estimator: gradients flow through z, use rounded value for forward
         z_rounded = z_clamped.detach().round()
         w_q = s_b * (z_rounded + (z_clamped - z_clamped.detach()))
-
-        return F.conv2d(
-            input,
-            w_q,
-            self.bias,
-            self.stride,
-            self.padding,
-            self.dilation,
-            self.groups,
-        )
+        return w_q
 
     def regularization(self, lam: float = 1e-4) -> Tensor:
         if self.alpha is None:
-            return torch.tensor(0.0, device=self.weight_fp.device, dtype=self.weight_fp.dtype)
+            return torch.tensor(0.0, device=self.s.device)
         r = torch.sigmoid(self.alpha)
         reg = (1.0 - (2.0 * r - 1.0).abs()).mean()
-        # print(lam)
         return float(lam) * reg
 
     def set_hard_round(self, hard: bool = True) -> None:
         self.hard_round_in_eval = hard
 
 
+class AdaRoundConv2d(nn.Conv2d, AdaRoundModule):
+    def __init__(self, original: nn.Conv2d, bits: int = 8, per_channel: bool = True) -> None:
+        nn.Conv2d.__init__(
+            self,
+            original.in_channels, original.out_channels, original.kernel_size,
+            original.stride, original.padding, original.dilation,
+            original.groups, original.bias is not None, original.padding_mode
+        )
+        AdaRoundModule.__init__(self, bits, per_channel, ch_axis=0)
+        
+        self.weight = nn.Parameter(original.weight.detach().clone(), requires_grad=False)
+        if original.bias is not None:
+            self.bias = nn.Parameter(original.bias.detach().clone(), requires_grad=False)
+        
+        self._init_scale(self.weight)
+
+    def forward(self, input: Tensor) -> Tensor:
+        w_q = self.get_quantized_weight(self.weight)
+        return F.conv2d(input, w_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+
+class AdaRoundConv1d(nn.Conv1d, AdaRoundModule):
+    def __init__(self, original: nn.Conv1d, bits: int = 8, per_channel: bool = True) -> None:
+        nn.Conv1d.__init__(
+            self,
+            original.in_channels, original.out_channels, original.kernel_size,
+            original.stride, original.padding, original.dilation,
+            original.groups, original.bias is not None, original.padding_mode
+        )
+        AdaRoundModule.__init__(self, bits, per_channel, ch_axis=0)
+        
+        self.weight = nn.Parameter(original.weight.detach().clone(), requires_grad=False)
+        if original.bias is not None:
+            self.bias = nn.Parameter(original.bias.detach().clone(), requires_grad=False)
+        
+        self._init_scale(self.weight)
+
+    def forward(self, input: Tensor) -> Tensor:
+        w_q = self.get_quantized_weight(self.weight)
+        return F.conv1d(input, w_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+
+class AdaRoundLinear(nn.Linear, AdaRoundModule):
+    def __init__(self, original: nn.Linear, bits: int = 8, per_channel: bool = True) -> None:
+        nn.Linear.__init__(
+            self, original.in_features, original.out_features, original.bias is not None
+        )
+        AdaRoundModule.__init__(self, bits, per_channel, ch_axis=0)
+        
+        self.weight = nn.Parameter(original.weight.detach().clone(), requires_grad=False)
+        if original.bias is not None:
+            self.bias = nn.Parameter(original.bias.detach().clone(), requires_grad=False)
+        
+        self._init_scale(self.weight)
+
+    def forward(self, input: Tensor) -> Tensor:
+        w_q = self.get_quantized_weight(self.weight)
+        return F.linear(input, w_q, self.bias)
+
+
 class AdaRoundQuantStrategy(QuantStrategy):
-    """Post-training quantization using AdaRound optimisation for Conv2d layers only."""
+    """Post-training quantization using AdaRound optimisation."""
 
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
@@ -150,11 +167,15 @@ class AdaRoundQuantStrategy(QuantStrategy):
 
     def _wrap_module(self, name: str, module: nn.Module) -> Optional[nn.Module]:
         if isinstance(module, nn.Conv2d):
-            wrapped = AdaRoundConv2d(
-                original=module,
-                bits=self.bits,
-                per_channel=self.per_channel,
-            )
+            wrapped = AdaRoundConv2d(module, self.bits, self.per_channel)
+            self.handles.append((name, wrapped))
+            return wrapped
+        if isinstance(module, nn.Conv1d):
+            wrapped = AdaRoundConv1d(module, self.bits, self.per_channel)
+            self.handles.append((name, wrapped))
+            return wrapped
+        if isinstance(module, nn.Linear):
+            wrapped = AdaRoundLinear(module, self.bits, self.per_channel)
             self.handles.append((name, wrapped))
             return wrapped
         return None
@@ -172,8 +193,7 @@ class AdaRoundQuantStrategy(QuantStrategy):
     def calibrate(self, loader) -> None:
         if self.model is None or self.reference_model is None:
             return
-        # if self.reference_model is None:
-        #     return
+        
         device = next(self.model.parameters()).device
         self.device = device
         self.reference_model.to(device)
@@ -182,27 +202,24 @@ class AdaRoundQuantStrategy(QuantStrategy):
 
         adaround_modules = [
             module for _, module in self.handles
-            if isinstance(module, AdaRoundConv2d)
+            if isinstance(module, AdaRoundModule)
         ]
         if not adaround_modules:
             return
 
-        # Initialize alpha parameters for all modules
-        # for module in adaround_modules:
-        #     module.train()
-
+        # Init alpha
         for module in adaround_modules:
-            if module.alpha is None:
-                # Force initialization by calling forward once
-                dummy_input = torch.randn(1, module.in_channels, 8, 8, device=device)
-                _ = module(dummy_input)
             module.train()
+            if module.alpha is None:
+                 module._init_alpha(module.weight)
 
-        # Now all modules should have alpha initialized
-        optimizer = torch.optim.Adam([module.alpha for module in adaround_modules if module.alpha is not None], lr=1e-2)
+        optimizer = torch.optim.Adam([m.alpha for m in adaround_modules], lr=1e-2)
         criterion = nn.MSELoss()
-        iterator = iter(loader)
+        
+        logger = getattr(self, "logger", None)
+        log_interval = int(self.config.get("log_interval", 100))
 
+        iterator = iter(loader)
         for iteration in range(self.rounding_iters):
             try:
                 batch = next(iterator)
@@ -211,28 +228,53 @@ class AdaRoundQuantStrategy(QuantStrategy):
                 batch = next(iterator)
 
             batch = move_batch_to_device(batch, device)
-            if "input" in batch:
-                inputs = batch["input"]
-            elif "lr" in batch:
-                inputs = batch["lr"]
-            elif isinstance(batch, (tuple, list)):
-                inputs = batch[0]
+            
+            if isinstance(batch, dict):
+                if "input" in batch:
+                    inputs = batch["input"]
+                elif "lr" in batch:
+                    inputs = batch["lr"]
+                else:
+                     raise KeyError("Batch dict must contain 'input' or 'lr'")
             else:
-                raise KeyError("Batch must contain 'input', 'lr', or be a tuple with input at index 0.")
+                 inputs = batch
 
             optimizer.zero_grad()
-            with torch.no_grad():
-                target = self.reference_model(inputs)
-            output = self.model(inputs)
-            loss = criterion(output, target)
+            
+            if isinstance(inputs, (tuple, list)):
+                with torch.no_grad():
+                    target = self.reference_model(*inputs)
+                output = self.model(*inputs)
+            else:
+                with torch.no_grad():
+                    target = self.reference_model(inputs)
+                output = self.model(inputs)
+            
+            if isinstance(target, (tuple, list)):
+                mse_loss = 0.0
+                for t, o in zip(target, output):
+                    mse_loss += criterion(o, t)
+            else:
+                mse_loss = criterion(output, target)
+
             reg = sum(module.regularization(lam=self.rounding_reg) for module in adaround_modules)
-            loss = loss + reg
+            loss = mse_loss + reg
             loss.backward()
             optimizer.step()
 
+            # Optional logging of calibration metrics
+            if logger is not None and (iteration % log_interval == 0 or iteration == self.rounding_iters - 1):
+                try:
+                    logger.report_scalar("AdaRound/mse_loss", "calibration", value=float(mse_loss.item()), iteration=iteration)
+                    logger.report_scalar("AdaRound/reg", "calibration", value=float(reg.item() if torch.is_tensor(reg) else reg), iteration=iteration)
+                    logger.report_scalar("AdaRound/total_loss", "calibration", value=float(loss.item()), iteration=iteration)
+                except Exception:
+                    # Logging should never break calibration
+                    pass
+
         for module in adaround_modules:
             module.eval()
+            module.set_hard_round(True)
 
     def step(self) -> None:
-        # No per-step updates needed after calibration
         pass

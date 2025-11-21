@@ -1,0 +1,9 @@
+base_config: ./base.yaml
+experiment:
+  name: espcn_qdrop
+quantization:
+  method: qdrop
+  bits: 8
+  activation_bits: 8
+  per_channel: true
+  qdrop_p: 0.1

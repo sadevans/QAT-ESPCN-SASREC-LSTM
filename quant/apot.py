@@ -1,5 +1,3 @@
-"""Additive Powers-of-Two quantization strategy."""
-
 from __future__ import annotations
 
 import itertools
@@ -8,7 +6,7 @@ from typing import Any, Dict, List
 import torch
 from torch import Tensor, nn
 
-from .base import QATQuantStrategy, UniformAffineQuantizer, FakeQuantizer
+from .base import FakeQuantizer, QATQuantStrategy, UniformAffineQuantizer
 
 
 class APoTQuantizer(FakeQuantizer):

@@ -1,0 +1,45 @@
+experiment:
+  name: espcn_fp32
+  seed: 42
+  deterministic: true
+  device: cuda
+
+model:
+  in_channels: 3
+  out_channels: 3
+  channels: 64
+  upscale_factor: 4
+
+training:
+  epochs: 30
+  batch_size: 16
+  grad_clip: 1.0
+  num_workers: 4
+  pin_memory: true
+
+optimization:
+  lr: 0.001
+
+paths:
+  checkpoints_dir: ./checkpoints
+  results_dir: ./results
+
+data:
+  train_dir: data/DIV2K_train_HR
+  val_dirs: [data/Set5, data/Set14]
+  patch_size: 96
+  rgb_range: 1.0
+
+quantization:
+  method: none
+  weight_bits: 32
+  act_bits: 32
+
+logging:
+  backend: clearml
+  clearml:
+    project_name: "ESPCN-QAT"
+    task_name: null  # Will be auto-generated from experiment name
+    tags: ["super-resolution", "espcn"]
+    log_images: true
+    log_image_interval: 5

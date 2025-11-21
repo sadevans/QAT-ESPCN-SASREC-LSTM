@@ -1,0 +1,15 @@
+base_config: ./base.yaml
+experiment:
+  name: espcn_adaround
+quantization:
+  method: adaround
+  bits: 8
+  per_channel: true
+  symmetric: true
+  rounding_iters: 1000
+  rounding_reg: 1e-4
+  quantize_embedding: false
+  # Option 1: Train FP32 from scratch for AdaRound (comment out base_checkpoint)
+  # fp32_epochs: 30
+  # Option 2: Use pre-trained FP32 checkpoint (uncomment and set path)
+  base_checkpoint: ./checkpoints/espcn_run/espcn_fp32.pth

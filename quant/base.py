@@ -1,5 +1,3 @@
-"""Base abstractions and utilities for quantization strategies."""
-
 from __future__ import annotations
 
 import abc
@@ -266,6 +264,50 @@ class QuantConv2d(nn.Conv2d):
         return output
 
 
+class QuantConv1d(nn.Conv1d):
+    """Conv1d layer wrapper that applies fake-quantizers to weights and activations."""
+
+    def __init__(
+        self,
+        original: nn.Conv1d,
+        weight_quantizer: FakeQuantizer,
+        activation_quantizer: Optional[FakeQuantizer] = None,
+    ) -> None:
+        super().__init__(
+            in_channels=original.in_channels,
+            out_channels=original.out_channels,
+            kernel_size=original.kernel_size,
+            stride=original.stride,
+            padding=original.padding,
+            dilation=original.dilation,
+            groups=original.groups,
+            bias=original.bias is not None,
+            padding_mode=original.padding_mode,
+        )
+        device = original.weight.device
+        self.to(device)
+        self.weight.data.copy_(original.weight.data)
+        if original.bias is not None and self.bias is not None:
+            self.bias.data.copy_(original.bias.data)
+        self.weight_quantizer = weight_quantizer
+        self.activation_quantizer = activation_quantizer
+
+    def forward(self, input: Tensor) -> Tensor:
+        weight_q = self.weight_quantizer(self.weight)
+        output = F.conv1d(
+            input,
+            weight_q,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
+        )
+        if self.activation_quantizer is not None:
+            output = self.activation_quantizer(output)
+        return output
+
+
 class QuantEmbedding(nn.Embedding):
     """Embedding wrapper that optionally quantizes embedding weights."""
 
@@ -301,6 +343,9 @@ class QuantStrategy(metaclass=abc.ABCMeta):
         self.quantize_embedding = config.get("quantize_embedding", False)
         self.handles: List[Tuple[str, nn.Module]] = []
         self.model: Optional[nn.Module] = None
+        # Optional experiment logger (e.g. ClearML Task logger)
+        # Set via ``set_logger`` from training scripts.
+        self.logger: Any = None
 
     def attach(self, model: nn.Module) -> nn.Module:
         self.model = model
@@ -317,7 +362,12 @@ class QuantStrategy(metaclass=abc.ABCMeta):
     def _wrap_module(self, name: str, module: nn.Module) -> Optional[nn.Module]:
         """Wrap a module with fake-quant operations."""
 
-    def calibrate(self, loader) -> None:  # pragma: no cover - to be overridden when needed
+    # --- Optional logging helpers -------------------------------------------------
+    def set_logger(self, logger: Any) -> None:
+        """Attach an experiment logger (ClearML, WandB, etc.)."""
+        self.logger = logger
+
+    def calibrate(self, loader) -> None:
         """Optional calibration step for certain strategies."""
 
     def step(self) -> None:
@@ -368,4 +418,34 @@ class QATQuantStrategy(QuantStrategy):
             if aq is not None:
                 aq.to(device)
             return QuantConv2d(module, wq, aq)
+        if isinstance(module, nn.Conv1d):
+            wq = self.create_weight_quantizer(name, module)
+            aq = self.create_activation_quantizer(name, module)
+            with torch.no_grad():
+                wq.initialize_from_tensor(module.weight.data)
+                wq.initialized.fill_(True)
+            device = module.weight.device
+            wq.to(device)
+            if aq is not None:
+                aq.to(device)
+            return QuantConv1d(module, wq, aq)
+        if isinstance(module, nn.Linear):
+            wq = self.create_weight_quantizer(name, module)
+            aq = self.create_activation_quantizer(name, module)
+            with torch.no_grad():
+                wq.initialize_from_tensor(module.weight.data)
+                wq.initialized.fill_(True)
+            device = module.weight.device
+            wq.to(device)
+            if aq is not None:
+                aq.to(device)
+            return QuantLinear(module, wq, aq)
+        if isinstance(module, nn.Embedding) and self.quantize_embedding:
+            wq = self.create_weight_quantizer(name, module)
+            with torch.no_grad():
+                wq.initialize_from_tensor(module.weight.data)
+                wq.initialized.fill_(True)
+            device = module.weight.device
+            wq.to(device)
+            return QuantEmbedding(module, wq)
         return None
