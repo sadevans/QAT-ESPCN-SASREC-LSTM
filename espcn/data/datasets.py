@@ -1,9 +1,10 @@
 import random
 from pathlib import Path
+
+import torch
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms as T
-import torch
 
 
 class DIV2KTrainDataset(Dataset):
