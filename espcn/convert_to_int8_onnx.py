@@ -1,3 +1,5 @@
+"""Export ESPCN checkpoints to ONNX format and convert to INT8 using ONNX Runtime."""
+
 from __future__ import annotations
 
 import argparse
@@ -27,6 +29,12 @@ from utils import (
 
 
 def parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments for ONNX export script.
+    
+    Returns:
+        Parsed arguments namespace.
+    """
     parser = argparse.ArgumentParser(
         description="Export ESPCN checkpoints referenced in benchmark JSON files to ONNX."
     )
@@ -69,6 +77,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def require_onnx() -> None:
+    """
+    Check if ONNX is installed, exit if not.
+    
+    Raises:
+        SystemExit: If ONNX is not installed.
+    """
     try:
         import onnx
     except ImportError as exc:
@@ -78,6 +92,18 @@ def require_onnx() -> None:
 
 
 def resolve_files(patterns: Sequence[str]) -> List[Path]:
+    """
+    Resolve file patterns to list of Path objects.
+    
+    Args:
+        patterns: Sequence of file path patterns (supports glob).
+        
+    Returns:
+        Sorted list of unique Path objects for existing files.
+        
+    Raises:
+        SystemExit: If no files match the patterns.
+    """
     files: List[Path] = []
     for pattern in patterns:
         matches = list(Path().glob(pattern))
@@ -88,6 +114,18 @@ def resolve_files(patterns: Sequence[str]) -> List[Path]:
 
 
 def load_records(path: Path) -> List[Dict[str, Any]]:
+    """
+    Load benchmark records from JSON file.
+    
+    Args:
+        path: Path to JSON file containing records.
+        
+    Returns:
+        List of benchmark record dictionaries.
+        
+    Raises:
+        ValueError: If JSON format is not supported (must be dict or list).
+    """
     payload = json.loads(path.read_text())
     if isinstance(payload, dict):
         return [payload]
@@ -97,6 +135,15 @@ def load_records(path: Path) -> List[Dict[str, Any]]:
 
 
 def build_model(base_config: Dict[str, Any]) -> QuantESPCN:
+    """
+    Build QuantESPCN model from base configuration.
+    
+    Args:
+        base_config: Configuration dictionary with 'model' key.
+        
+    Returns:
+        QuantESPCN model instance.
+    """
     return QuantESPCN(**base_config["model"])
 
 
@@ -105,6 +152,17 @@ def _maybe_prepare_quant(
     method: str,
     quant_cfg: Dict[str, Any],
 ) -> None:
+    """
+    Prepare quantization strategy for model if method is not FP32.
+    
+    Initializes quantizer parameters (for QAT methods) or alpha parameters
+    (for AdaRound) before loading state dict.
+    
+    Args:
+        model: ESPCN model to prepare.
+        method: Quantization method name ('fp32', 'lsq', 'apot', 'qdrop', 'adaround').
+        quant_cfg: Quantization configuration dictionary.
+    """
     method = method.lower()
     if method in {"fp32", "none"}:
         return
@@ -133,6 +191,15 @@ def _maybe_prepare_quant(
 
 
 def load_state_dict(checkpoint: Path) -> Dict[str, Any]:
+    """
+    Load model state dictionary from checkpoint file.
+    
+    Args:
+        checkpoint: Path to checkpoint file.
+        
+    Returns:
+        Model state dictionary (extracted from checkpoint if nested).
+    """
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
     if isinstance(state, dict):
         if "model_state_dict" in state:
@@ -218,6 +285,15 @@ def convert_quantized_weights_to_static(model: QuantESPCN) -> None:
 
 
 def export_to_onnx(model: QuantESPCN, sample: torch.Tensor, onnx_path: Path, opset: int) -> None:
+    """
+    Export model to ONNX format.
+    
+    Args:
+        model: ESPCN model to export (should have quantized weights converted to static).
+        sample: Example input tensor for tracing.
+        onnx_path: Path to save ONNX model.
+        opset: ONNX opset version.
+    """
     os.environ.setdefault("TORCH_ONNX_EXPERIMENTAL_EXPORTER", "0")
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
     torch.onnx.export(
@@ -237,6 +313,15 @@ def export_to_onnx(model: QuantESPCN, sample: torch.Tensor, onnx_path: Path, ops
 
 
 def iter_input_records(paths: Iterable[Path]) -> Iterable[Dict[str, Any]]:
+    """
+    Iterate over records from multiple JSON files.
+    
+    Args:
+        paths: Iterable of paths to JSON files containing benchmark records.
+        
+    Yields:
+        Benchmark record dictionaries from all input files.
+    """
     for path in paths:
         for record in load_records(path):
             record["_source"] = str(path)
@@ -244,6 +329,13 @@ def iter_input_records(paths: Iterable[Path]) -> Iterable[Dict[str, Any]]:
 
 
 def main() -> None:
+    """
+    Main function to export ESPCN checkpoints to ONNX format.
+    
+    Loads checkpoints from benchmark JSON files, prepares quantization,
+    converts quantized weights to static, and exports to ONNX format.
+    Optionally creates INT8 quantized version using ONNX Runtime.
+    """
     require_onnx()
     args = parse_args()
     inputs = resolve_files(args.inputs)

@@ -1,3 +1,5 @@
+"""Dataset classes for ESPCN training and evaluation."""
+
 import random
 from pathlib import Path
 
@@ -8,7 +10,22 @@ from torchvision import transforms as T
 
 
 class DIV2KTrainDataset(Dataset):
-    """Training dataset with random cropping and online LR generation."""
+    """
+    Training dataset with random cropping and online low-resolution generation.
+    
+    For each HR image, generates LR patches by downsampling with bicubic interpolation.
+    Supports random cropping for data augmentation.
+    
+    Args:
+        hr_dir: Path to directory containing high-resolution training images.
+        patch_size: Size of cropped patches (default: 96).
+        upscale_factor: Super-resolution scale factor (default: 4).
+        rgb_range: Value range for pixel values (default: 1.0 for [0, 1]).
+        
+    Raises:
+        FileNotFoundError: If HR directory doesn't exist or contains no images.
+        ValueError: If patch_size is not divisible by upscale_factor.
+    """
 
     def __init__(self, hr_dir, patch_size=96, upscale_factor=4, rgb_range=1.0):
         hr_dir = Path(hr_dir)
@@ -31,10 +48,22 @@ class DIV2KTrainDataset(Dataset):
         self.lr_size = patch_size // upscale_factor
         self.to_tensor = T.ToTensor()
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of HR images in the dataset."""
         return len(self.hr_files)
 
     def __getitem__(self, idx):
+        """
+        Get a training sample with randomly cropped HR and LR patches.
+        
+        Args:
+            idx: Index of the sample.
+            
+        Returns:
+            Dictionary with keys:
+                - 'lr': Low-resolution tensor of shape (1, H/patch_size, W/patch_size).
+                - 'hr': High-resolution tensor of shape (1, H, W).
+        """
         hr = Image.open(self.hr_files[idx]).convert("L")
 
         w, h = hr.size
@@ -67,7 +96,20 @@ class DIV2KTrainDataset(Dataset):
 
 
 class SRBenchmarkDataset(Dataset):
-    """Validation/Test dataset: full-image inference, LR generated online from HR."""
+    """
+    Validation/Test dataset for full-image super-resolution evaluation.
+    
+    Uses pre-generated LR images from the benchmark dataset (e.g., Set5, Set14).
+    Assumes HR and LR images are paired with naming convention '*_HR.png' and '*_LR.png'.
+    
+    Args:
+        hr_dir: Path to directory containing HR images (searches for 'image_SRF_{scale}' subdirectory).
+        upscale_factor: Super-resolution scale factor (default: 4).
+        rgb_range: Value range for pixel values (default: 1.0 for [0, 1]).
+        
+    Raises:
+        FileNotFoundError: If HR directory doesn't exist or contains no images.
+    """
 
     def __init__(self, hr_dir, upscale_factor=4, rgb_range=1.0):
         hr_dir = Path(hr_dir)
@@ -87,10 +129,23 @@ class SRBenchmarkDataset(Dataset):
         self.rgb_range = rgb_range
         self.to_tensor = T.ToTensor()
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of HR images in the dataset."""
         return len(self.hr_files)
 
     def __getitem__(self, idx):
+        """
+        Get a validation/test sample with full HR and LR images.
+        
+        Args:
+            idx: Index of the sample.
+            
+        Returns:
+            Dictionary with keys:
+                - 'lr': Low-resolution tensor of shape (1, H_lr, W_lr).
+                - 'hr': High-resolution tensor of shape (1, H_hr, W_hr).
+                - 'name': Image name (without extension).
+        """
         hr_path = self.hr_files[idx]
         hr = Image.open(hr_path).convert("L")
         name = hr_path.stem

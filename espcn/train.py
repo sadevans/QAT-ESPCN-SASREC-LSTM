@@ -1,3 +1,5 @@
+"""Training script for ESPCN model with FP32, QAT, and PTQ quantization support."""
+
 from __future__ import annotations
 
 import argparse
@@ -23,16 +25,45 @@ from utils import (
 
 
 def build_model(config: Dict[str, Any]) -> QuantESPCN:
+    """
+    Build QuantESPCN model from configuration.
+    
+    Args:
+        config: Configuration dictionary with 'model' key containing model parameters.
+        
+    Returns:
+        QuantESPCN model instance.
+    """
     model_cfg = config["model"].copy()
     return QuantESPCN(**model_cfg)
 
 
 def calculate_psnr(img1: torch.Tensor, img2: torch.Tensor) -> float:
+    """
+    Calculate Peak Signal-to-Noise Ratio (PSNR) between two images.
+    
+    Args:
+        img1: First image tensor.
+        img2: Second image tensor.
+        
+    Returns:
+        PSNR value in decibels (dB).
+    """
     mse = torch.mean((img1 - img2) ** 2)
     return 20 * torch.log10(1.0 / torch.sqrt(mse + 1e-8)).item()
 
 
 def calculate_ssim(img1: torch.Tensor, img2: torch.Tensor) -> float:
+    """
+    Calculate Structural Similarity Index (SSIM) between two images.
+    
+    Args:
+        img1: First image tensor.
+        img2: Second image tensor.
+        
+    Returns:
+        SSIM value in [0, 1] range (higher is better).
+    """
     C1 = (0.01 * 1.0) ** 2  # max_val = 1.0
     C2 = (0.03 * 1.0) ** 2
 
@@ -54,6 +85,15 @@ def calculate_ssim(img1: torch.Tensor, img2: torch.Tensor) -> float:
 
 
 def _normalize_image_tensor(x: torch.Tensor) -> torch.Tensor:
+    """
+    Normalize image tensor to [0, 1] range for visualization.
+    
+    Args:
+        x: Input image tensor.
+        
+    Returns:
+        Normalized tensor with values in [0, 1] range.
+    """
     x = x.detach().cpu()
     x_min = float(x.min())
     x_max = float(x.max())
@@ -64,7 +104,18 @@ def _normalize_image_tensor(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
-def log_images(logger, step, prefix, lr, sr, hr):
+def log_images(logger, step, prefix, lr, sr, hr) -> None:
+    """
+    Log images (LR, SR, HR) to ClearML logger.
+    
+    Args:
+        logger: ClearML task logger (or None to skip logging).
+        step: Current step/epoch number.
+        prefix: Prefix for image titles (e.g., "Train", "Val").
+        lr: Low-resolution image tensor.
+        sr: Super-resolved image tensor.
+        hr: High-resolution (ground truth) image tensor.
+    """
     if logger is None:
         return
 
@@ -178,8 +229,17 @@ def save_checkpoint(
     epoch: int,
     checkpoint_dir: str,
     filename: str,
-):
-    """Save model checkpoint."""
+) -> None:
+    """
+    Save model and optimizer state to checkpoint file.
+    
+    Args:
+        model: Model to save.
+        optimizer: Optimizer to save.
+        epoch: Current epoch number.
+        checkpoint_dir: Directory to save checkpoint in.
+        filename: Name of checkpoint file.
+    """
     os.makedirs(checkpoint_dir, exist_ok=True)
     path = os.path.join(checkpoint_dir, filename)
     torch.save({
@@ -195,7 +255,21 @@ def load_checkpoint(
     checkpoint_dir: str,
     filename: str,
 ) -> int:
-    """Load model checkpoint and return epoch number."""
+    """
+    Load model and optimizer state from checkpoint file.
+    
+    Args:
+        model: Model to load state into.
+        optimizer: Optimizer to load state into.
+        checkpoint_dir: Directory containing checkpoint file.
+        filename: Name of checkpoint file.
+        
+    Returns:
+        Epoch number from checkpoint.
+        
+    Raises:
+        FileNotFoundError: If checkpoint file doesn't exist.
+    """
     path = os.path.join(checkpoint_dir, filename)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
@@ -218,8 +292,22 @@ def train_fp32(
     checkpoint_dir: str,
     save_name: str,
     logger=None
-):
-    """Train FP32 model."""
+) -> None:
+    """
+    Train FP32 (full precision) model.
+    
+    Args:
+        model: ESPCN model to train.
+        train_loader: DataLoader for training data.
+        val_loader: DataLoader for validation data.
+        config: Configuration dictionary with optimization settings.
+        criterion: Loss function.
+        device: Device to train on.
+        epochs: Number of training epochs.
+        checkpoint_dir: Directory to save checkpoints.
+        save_name: Filename for saved checkpoint.
+        logger: Optional ClearML logger for metrics and images.
+    """
     print("Starting FP32 training...")
     
     optimizer = Adam(
@@ -263,7 +351,27 @@ def train_qat(
     checkpoint_dir: str,
     save_name: str,
     logger=None
-):
+) -> None:
+    """
+    Train model with Quantization-Aware Training (QAT) using specified strategy.
+    
+    Supports LSQ, APoT, and QDrop strategies. Initializes quantizer parameters
+    before training starts.
+    
+    Args:
+        model: ESPCN model to train.
+        train_loader: DataLoader for training data.
+        val_loader: DataLoader for validation data.
+        config: Configuration dictionary with optimization settings.
+        criterion: Loss function.
+        device: Device to train on.
+        strategy_name: QAT strategy name ('lsq', 'apot', 'qdrop').
+        quant_config: Quantization configuration dictionary.
+        epochs: Number of training epochs.
+        checkpoint_dir: Directory to save checkpoints.
+        save_name: Filename for saved checkpoint.
+        logger: Optional ClearML logger for metrics and images.
+    """
     """Train model with quantization-aware training (QAT)."""
     print(f"Starting QAT with {strategy_name.upper()}...")
 
@@ -315,8 +423,27 @@ def apply_adaround(
     checkpoint_dir: str,
     save_name: str,
     logger=None
-):
-    """Apply AdaRound post-training quantization."""
+) -> None:
+    """
+    Apply AdaRound post-training quantization (PTQ) to FP32 model.
+    
+    Loads FP32 checkpoint, applies AdaRound calibration using training data,
+    and saves quantized checkpoint.
+    
+    Args:
+        model: ESPCN model to quantize.
+        train_loader: DataLoader for calibration samples.
+        val_loader: DataLoader for validation (for evaluation after calibration).
+        device: Device to run calibration on.
+        fp32_checkpoint: Filename of FP32 checkpoint to load.
+        adaround_config: AdaRound quantization configuration.
+        checkpoint_dir: Directory containing FP32 checkpoint and to save quantized checkpoint.
+        save_name: Filename for saved quantized checkpoint.
+        logger: Optional ClearML logger for metrics.
+        
+    Raises:
+        FileNotFoundError: If FP32 checkpoint doesn't exist.
+    """
     print("Starting AdaRound PTQ...")
 
     fp32_path = os.path.join(checkpoint_dir, fp32_checkpoint)

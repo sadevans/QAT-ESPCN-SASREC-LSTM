@@ -1,3 +1,5 @@
+"""Benchmark ESPCN quantization methods (FP32, LSQ, APoT, QDrop, AdaRound) on CPU."""
+
 from __future__ import annotations
 
 import argparse
@@ -17,6 +19,15 @@ from utils import load_config, ensure_dir, get_espcn_method_configs
 
 
 def build_model(config: Dict[str, Any]) -> nn.Module:
+    """
+    Build ESPCN model from configuration.
+    
+    Args:
+        config: Configuration dictionary with 'model' key containing model parameters.
+        
+    Returns:
+        QuantESPCN model instance.
+    """
     model_cfg = config["model"].copy()
     return QuantESPCN(**model_cfg)
 
@@ -27,6 +38,17 @@ def eval_psnr_ssim(
     loader: DataLoader,
     device: torch.device,
 ) -> Tuple[float, float]:
+    """
+    Evaluate PSNR and SSIM metrics on validation dataset.
+    
+    Args:
+        model: ESPCN model to evaluate.
+        loader: DataLoader with validation samples.
+        device: Device to run evaluation on.
+        
+    Returns:
+        Tuple of (average_psnr, average_ssim) across all samples.
+    """
     from espcn.train import calculate_psnr, calculate_ssim
 
     model.eval().to(device)
@@ -54,6 +76,21 @@ def benchmark_cpu_latency(
     warmup: int = 5,
     iters: int = 50,
 ) -> Dict[str, float]:
+    """
+    Benchmark model latency and throughput on CPU.
+    
+    Args:
+        model: Model to benchmark.
+        loader: DataLoader with input samples.
+        warmup: Number of warmup iterations before timing (default: 5).
+        iters: Number of iterations to measure (default: 50).
+        
+    Returns:
+        Dictionary with keys:
+            - 'throughput_samples_per_sec': Throughput in samples/second.
+            - 'avg_latency_ms': Average latency in milliseconds.
+            - 'median_latency_ms': Median latency in milliseconds.
+    """
     device = torch.device("cpu")
     model.eval().to(device)
 
@@ -89,6 +126,15 @@ def benchmark_cpu_latency(
 
 
 def model_size_mb(checkpoint_path: Path) -> float:
+    """
+    Get checkpoint file size in megabytes.
+    
+    Args:
+        checkpoint_path: Path to checkpoint file.
+        
+    Returns:
+        File size in megabytes.
+    """
     if not checkpoint_path.is_file():
         return 0.0
     size_bytes = checkpoint_path.stat().st_size
@@ -102,6 +148,25 @@ def load_model_from_checkpoint(
     method: str = "fp32",
     quant_config: Optional[Dict[str, Any]] = None,
 ) -> nn.Module:
+    """
+    Load model from checkpoint with proper quantization setup.
+    
+    Handles initialization of quantization parameters for QAT methods (LSQ, APoT, QDrop)
+    and PTQ methods (AdaRound). Adapts state_dict for shape mismatches in buffers.
+    
+    Args:
+        config: Configuration dictionary with model parameters.
+        ckpt_path: Path to checkpoint file.
+        device: Device to load model on.
+        method: Quantization method name ('fp32', 'lsq', 'apot', 'qdrop', 'adaround').
+        quant_config: Quantization configuration dictionary.
+        
+    Returns:
+        Loaded and initialized model.
+        
+    Raises:
+        ValueError: If quant_config is missing for QAT methods or AdaRound.
+    """
     model = build_model(config)
     raw_state = torch.load(ckpt_path, map_location=device, weights_only=False)
     if "model_state_dict" in raw_state:

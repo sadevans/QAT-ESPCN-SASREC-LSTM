@@ -62,6 +62,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def create_session(path: Path) -> ort.InferenceSession:
+    """
+    Create ONNX Runtime inference session for CPU execution.
+    
+    Args:
+        path: Path to ONNX model file.
+        
+    Returns:
+        ONNX Runtime inference session configured for CPU.
+    """
     so = ort.SessionOptions()
     so.intra_op_num_threads = 1
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -69,6 +78,16 @@ def create_session(path: Path) -> ort.InferenceSession:
 
 
 def eval_psnr(session: ort.InferenceSession, loader: DataLoader) -> float:
+    """
+    Evaluate PSNR metric using ONNX model inference.
+    
+    Args:
+        session: ONNX Runtime inference session.
+        loader: DataLoader with validation samples.
+        
+    Returns:
+        Average PSNR across all validation samples.
+    """
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
 
@@ -89,6 +108,20 @@ def eval_psnr(session: ort.InferenceSession, loader: DataLoader) -> float:
 
 
 def benchmark_latency(session: ort.InferenceSession, loader: DataLoader, warmup: int) -> Dict[str, float]:
+    """
+    Benchmark ONNX model latency and throughput on CPU.
+    
+    Args:
+        session: ONNX Runtime inference session.
+        loader: DataLoader with input samples.
+        warmup: Number of warmup iterations before timing.
+        
+    Returns:
+        Dictionary with keys:
+            - 'avg_latency_ms': Average latency in milliseconds.
+            - 'median_latency_ms': Median latency in milliseconds.
+            - 'throughput_fps': Throughput in frames per second.
+    """
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
 
@@ -121,12 +154,32 @@ def benchmark_latency(session: ort.InferenceSession, loader: DataLoader, warmup:
 
 
 def model_size_mb(path: Path) -> float:
+    """
+    Get ONNX model file size in megabytes.
+    
+    Args:
+        path: Path to ONNX model file.
+        
+    Returns:
+        File size in megabytes, or 0.0 if file doesn't exist.
+    """
     if not path.is_file():
         return 0.0
     return path.stat().st_size / (1024 * 1024)
 
 
 def run_single(session: ort.InferenceSession, loader: DataLoader, warmup: int) -> Dict[str, float]:
+    """
+    Run complete benchmark for a single ONNX model (latency and PSNR).
+    
+    Args:
+        session: ONNX Runtime inference session.
+        loader: DataLoader with validation samples.
+        warmup: Number of warmup iterations before timing.
+        
+    Returns:
+        Dictionary with benchmark metrics (latency, throughput, PSNR).
+    """
     metrics = benchmark_latency(session, loader, warmup)
     metrics["psnr"] = eval_psnr(session, loader)
     return metrics

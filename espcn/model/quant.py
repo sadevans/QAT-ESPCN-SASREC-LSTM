@@ -20,12 +20,31 @@ class QuantESPCN(BaseESPCN):
         upscale_factor: int = 3,
         quant_strategy=None,  # instance of QuantStrategy
     ):
+        """
+        Initialize QuantESPCN model with optional quantization strategy.
+        
+        Args:
+            in_channels: Number of input channels (default: 3).
+            out_channels: Number of output channels (default: 3).
+            channels: Number of feature channels in hidden layers (default: 64).
+            upscale_factor: Super-resolution scale factor (default: 3).
+            quant_strategy: Optional quantization strategy instance (for manual setup).
+        """
         super().__init__(in_channels, out_channels, channels, upscale_factor)
         self.quant_strategy = quant_strategy
         self.quant_enabled = True
 
-    def prepare_quant(self, strategy_name: str, config: dict):
-        """Attach quantization strategy (for QAT or PTQ)."""
+    def prepare_quant(self, strategy_name: str, config: dict) -> None:
+        """
+        Attach quantization strategy to the model (for QAT or PTQ).
+        
+        Args:
+            strategy_name: Name of quantization strategy ('lsq', 'apot', 'qdrop', 'adaround').
+            config: Quantization configuration dictionary.
+            
+        Raises:
+            ValueError: If strategy_name is not recognized.
+        """
         if strategy_name == "lsq":
             from quant.lsq import LSQQuantStrategy
             self.quant_strategy = LSQQuantStrategy(config)
@@ -46,22 +65,43 @@ class QuantESPCN(BaseESPCN):
         print(f"Quantization strategy attached:\n{self.quant_strategy}")
 
     def forward(self, x: Tensor) -> Tensor:
-        # always use base forward - quantization is applied in-place via strategy
+        """
+        Forward pass with quantization applied in-place via strategy.
+        
+        Args:
+            x: Input tensor of shape (B, C, H, W).
+            
+        Returns:
+            Quantized output tensor of shape (B, C, H*scale, W*scale).
+        """
         return super().forward(x)
 
-    def calibrate(self, dataloader):
-        """For PTQ strategies like AdaRound."""
+    def calibrate(self, dataloader) -> None:
+        """
+        Calibrate quantization parameters using PTQ strategies like AdaRound.
+        
+        Args:
+            dataloader: DataLoader with calibration samples.
+        """
         if hasattr(self.quant_strategy, "calibrate"):
             self.quant_strategy.calibrate(dataloader)
 
-    def disable_quant(self):
+    def disable_quant(self) -> None:
+        """Disable quantization (use full precision)."""
         self.quant_enabled = False
 
-    def enable_quant(self):
+    def enable_quant(self) -> None:
+        """Enable quantization."""
         self.quant_enabled = True
 
     def state_dict(self, *args, **kwargs):
-        # return base model state - quantization parameters are included in the model
+        """
+        Return model state dictionary including quantization parameters.
+        
+        Returns:
+            State dictionary containing all model parameters and buffers,
+            including quantization-related parameters (scales, alphas, etc.).
+        """
         return super().state_dict(*args, **kwargs)
     
     def convert_quantized_weights_to_static(self) -> None:

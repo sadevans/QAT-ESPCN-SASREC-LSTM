@@ -1,3 +1,5 @@
+"""Convert ESPCN benchmark JSON results to Markdown table format."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,19 +9,50 @@ from typing import Any, Dict, List
 
 
 def load_records(path: Path) -> List[Dict[str, Any]]:
+    """
+    Load benchmark records from JSON file.
+    
+    Args:
+        path: Path to JSON file containing benchmark records.
+        
+    Returns:
+        List of benchmark record dictionaries.
+    """
     data = json.loads(path.read_text())
     if isinstance(data, list):
         return data
     return []
 
 
-def fmt(value, default: str = "-") -> str:
+def fmt(value: Any, default: str = "-") -> str:
+    """
+    Format value as string, using default if value is None.
+    
+    Args:
+        value: Value to format.
+        default: Default string to return if value is None.
+        
+    Returns:
+        Formatted string representation of value.
+    """
     if value is None:
         return default
     return str(value)
 
 
 def to_markdown(records: List[Dict[str, Any]]) -> str:
+    """
+    Convert benchmark records to Markdown table format.
+    
+    Args:
+        records: List of benchmark record dictionaries with keys:
+            - model, quant_method, psnr_y, ssim,
+            - throughput_samples_per_sec, avg_latency_ms, median_latency_ms,
+            - model_size_mb.
+            
+    Returns:
+        Markdown-formatted table string.
+    """
     columns = [
         "model",
         "quant_method",

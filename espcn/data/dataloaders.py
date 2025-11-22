@@ -1,3 +1,5 @@
+"""DataLoader factory functions for ESPCN training and evaluation."""
+
 import random
 from pathlib import Path
 
@@ -8,6 +10,18 @@ from .datasets import DIV2KTrainDataset, SRBenchmarkDataset
 
 
 def get_train_loader(config):
+    """
+    Create DataLoader for training dataset.
+    
+    Args:
+        config: Configuration dictionary with keys:
+            - 'data': Contains 'train_dir', 'patch_size', 'rgb_range'.
+            - 'model': Contains 'upscale_factor'.
+            - 'training': Contains 'batch_size', 'num_workers', 'pin_memory'.
+            
+    Returns:
+        DataLoader for training dataset with shuffled batches.
+    """
     ds = DIV2KTrainDataset(
         hr_dir=config['data']['train_dir'],
         patch_size=config['data']['patch_size'],
@@ -25,7 +39,18 @@ def get_train_loader(config):
 
 
 def get_val_loaders(config):
-    """Returns list of validation DataLoaders (one per val dir)."""
+    """
+    Create list of validation DataLoaders (one per validation directory).
+    
+    Args:
+        config: Configuration dictionary with keys:
+            - 'data': Contains 'val_dirs' (list of paths) and 'rgb_range'.
+            - 'model': Contains 'upscale_factor'.
+            - 'training': Contains 'num_workers', 'pin_memory'.
+            
+    Returns:
+        List of DataLoaders, one for each validation directory.
+    """
     datasets = [
         SRBenchmarkDataset(
             hr_dir=Path(dir_path),
@@ -47,7 +72,20 @@ def get_val_loaders(config):
 
 
 def create_dataloaders(config, seed=None):
-    """Compatibility wrapper."""
+    """
+    Create training, validation, and test DataLoaders.
+    
+    Args:
+        config: Configuration dictionary with data and training settings.
+        seed: Optional random seed for reproducibility.
+        
+    Returns:
+        Tuple of (train_loader, val_loader, test_loader):
+            - train_loader: DataLoader for training.
+            - val_loader: DataLoader for validation (first validation directory).
+            - test_loader: DataLoader for testing (second validation directory if exists,
+                         otherwise same as val_loader).
+    """
     if seed is not None:
         torch.manual_seed(seed)
         random.seed(seed)
