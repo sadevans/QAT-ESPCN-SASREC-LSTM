@@ -18,9 +18,10 @@ espcn/
   benchmark_onnx_int8.py     # бенчмарк готовых ONNX моделей (FP32/INT8)
   convert_to_int8_onnx.py    # экспорт PyTorch чекпоинта в ONNX + динамическое INT8
   aggregate_benchmark_md.py  # агрегация результатов в Markdown-таблицы
+  download_datasets.py       # загрузка датасетов (DIV2K, Set5, Set14)
   data/
-    dataloaders.py
-    datasets.py
+    dataloaders.py           # фабрики DataLoader для обучения и валидации
+    datasets.py              # классы датасетов (DIV2KTrainDataset, SRBenchmarkDataset)
   model/
     base.py                  # базовая архитектура ESPCN
     quant.py                 # QuantESPCN + интеграция стратегий quant/
@@ -39,6 +40,20 @@ scripts/
 - **Обучение**: `DIV2K_train_HR` (путь задаётся в `configs/espcn/base.yaml` как `data.train_dir`),  
   из полноразмерных HR‑изображений генерируются LR‑патчи с бикубической деградацией (см. `DIV2KTrainDataset`).
 - **Валидация и тест**: наборы эталонных изображений `Set5` и `Set14` (пути в `data.val_dirs`),  качество измеряется по PSNR/SSIM на HR.
+
+**Загрузка датасетов:**
+
+Перед началом работы необходимо загрузить датасеты:
+
+```bash
+python espcn/download_datasets.py --data-root data
+```
+
+Скрипт автоматически загрузит:
+- `DIV2K_train_HR` из официального источника ETH Zurich
+- `Set5` и `Set14` из figshare
+
+Все датасеты будут сохранены в указанную директорию (`data` по умолчанию).
 
 Конфиги
 -------
@@ -148,53 +163,39 @@ PYTHONPATH=. python espcn/benchmark_quant.py \
   --results-out results/espcn_quant_benchmark.json
 ```
 
-Построение графиков
--------------------
 
-Скрипт `espcn/plot_quant_analysis.py` использует результаты бенчмарка и строит:
 
-- PSNR vs latency
-- PSNR vs размер модели
-- SSIM vs latency
-- распределения весов FP32 и квантованных моделей
-- распределения активаций FP32 и квантованных моделей для одной выборки
 
-Пример запуска:
+Экспорт в ONNX и INT8 квантование
+----------------------------------
+
+Скрипт `espcn/convert_to_int8_onnx.py` экспортирует PyTorch чекпоинты в ONNX формат и создаёт динамически квантованные INT8 версии:
 
 ```bash
-PYTHONPATH=. python espcn/plot_quant_analysis.py \
-  --benchmark-json results/espcn_quant_benchmark.json \
+PYTHONPATH=. python espcn/convert_to_int8_onnx.py \
+  --inputs results/espcn_quant_benchmark.json \
   --base-config configs/espcn/base.yaml \
-  --checkpoint-dir checkpoints/espcn_run \
-  --out-dir results/plots_espcn
+  --onnx-dir onnx_exports \
+  --opset 18
 ```
 
-После этого в `results/plots_espcn/` будут лежать PNG‑графики с трейдоффами по качеству/скорости и распределениями весов/активаций.
+Этот скрипт читает записи из JSON файлов бенчмарка, загружает соответствующие чекпоинты, конвертирует квантованные веса в статические и экспортирует в ONNX.
 
+**Бенчмарк ONNX моделей:**
 
-ONNX / INT8 бенчмарк
---------------------
-
-`espcn/onnx_int8_benchmark.py` экспортирует выбранный чекпоинт в ONNX, применяет динамическую INT8‑квантование через ONNX Runtime и измеряет PSNR/SSIM и латентность на CPU:
+Скрипт `espcn/benchmark_onnx_int8.py` сравнивает качество и производительность FP32 и INT8 ONNX моделей:
 
 ```bash
-PYTHONPATH=. python espcn/onnx_int8_benchmark.py \
-  --checkpoint checkpoints/espcn_run/espcn_adaround.pth \
-  --base-config configs/espcn/espcn_adaround.yaml \
-  --onnx-fp32 onnx/espcn_fp32.onnx \
-  --onnx-int8 onnx/espcn_int8.onnx \
-  --results-out results/espcn_int8_report.json
+PYTHONPATH=. python espcn/benchmark_onnx_int8.py \
+  --base-config configs/espcn/base.yaml \
+  --onnx-fp32 onnx_exports/espcn_fp32.onnx \
+  --onnx-int8 onnx_exports/espcn_int8.onnx \
+  --results-out results/espcn_onnx_benchmark.json
 ```
 
-Скрипт выполняет последовательность операций FP32 → ONNX → ONNX INT8, оценивает качество и производительность на CPU и сохраняет отчёт с метриками/латентностью/размером моделей.
+Скрипт выполняет последовательность операций: загружает ONNX модели, оценивает качество (PSNR) и производительность (latency, throughput) на CPU, и сохраняет отчёт с метриками.
 
-**Известные ограничения экспорта:** PyTorch ≥2.1 по умолчанию использует новый экспорт через `torch.export`. Если во время экспорта возникает ошибка `GuardOnDataDependentSymNode` (обычно в `quant/adaround.py` при проверке `bool(alpha_init)`), можно воспользоваться одним из вариантов:
-
-- до вызова `torch.onnx.export` задать `torch._dynamo.config.suppress_errors = True` (см. рекомендации PyTorch);
-- переключиться на классический экспортатор (`TORCH_ONNX_EXPERIMENTAL_EXPORTER=0`) или использовать PyTorch 2.1/2.2;
-- экспортировать FP32 чекпоинт (без AdaRound) и применять INT8‑квантование средствами ONNX Runtime уже после экспорта.
-
-После успешного запуска в `results/espcn_int8_report.json` появится сравнительный отчёт FP32 vs INT8 (PSNR, SSIM, latency, throughput, размер ONNX файлов).
+**Известные ограничения экспорта:** PyTorch ≥2.1 по умолчанию использует новый экспорт через `torch.export`. Если во время экспорта возникает ошибка `GuardOnDataDependentSymNode` (обычно в `quant/adaround.py` при проверке `bool(alpha_init)`), скрипт автоматически переключается на классический экспортатор (`TORCH_ONNX_EXPERIMENTAL_EXPORTER=0`).
 
 
 Итоги бенчмарка
@@ -229,7 +230,8 @@ ONNX INT8 результаты
 Выводы
 ------
 
-- **LSQ** демонстрирует устойчивую скорость, но на текущих настройках теряет ≈3.6 dB и 0.045 SSIM, поэтому нуждается в лучшем подборе параметров (регуляризация, контроль scale_param)
+- **FP32** остаётся эталоном: 24.84 dB / 0.9541 SSIM при ~15 мс на CPU и служит базой для всех PTQ/QAT сценариев.
+- **LSQ** демонстрирует устойчивую скорость, но на текущих настройках теряет ≈3.6 dB и 0.045 SSIM, поэтому нуждается в лучшем подборе параметров (регуляризация, контроль scale_param).
 - **APoT** в приведённой конфигурации деградирует сильнее остальных (PSNR ≈22.5 dB);
 - **QDrop** почти не уступает FP32 по качеству (24.45 dB / 0.9502 SSIM), однако платит за это увеличением латентности (≈28 мс на CPU). Подходит, если приоритет — качество, а время работы не критично.
 - **AdaRound** обеспечивает лучший баланс (24.83 dB / 0.9541 SSIM при 15.39 мс и размере чекпоинта ~0.20 MB) и выбран в качестве основного PTQ-варианта для CPU-инференса.

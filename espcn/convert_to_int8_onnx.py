@@ -329,13 +329,6 @@ def iter_input_records(paths: Iterable[Path]) -> Iterable[Dict[str, Any]]:
 
 
 def main() -> None:
-    """
-    Main function to export ESPCN checkpoints to ONNX format.
-    
-    Loads checkpoints from benchmark JSON files, prepares quantization,
-    converts quantized weights to static, and exports to ONNX format.
-    Optionally creates INT8 quantized version using ONNX Runtime.
-    """
     require_onnx()
     args = parse_args()
     inputs = resolve_files(args.inputs)
