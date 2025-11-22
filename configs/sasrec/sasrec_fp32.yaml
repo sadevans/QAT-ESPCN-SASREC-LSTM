@@ -1,0 +1,7 @@
+base_config: base.yaml
+experiment:
+  run_name: sasrec_fp32
+
+quantization:
+  method: fp32
+

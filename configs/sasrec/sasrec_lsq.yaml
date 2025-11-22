@@ -1,12 +1,14 @@
-base_config: ./base.yaml
+base_config: base.yaml
 experiment:
-  name: espcn_lsq
+  run_name: sasrec_lsq
 
 quantization:
   method: lsq
   bits: 8
   activation_bits: 8
+  per_channel: true
+  activation_per_channel: false
   symmetric: true
   activation_symmetric: false
-  per_channel: true
-  alpha_init: 2.0
+  alpha_init: 1.5
+

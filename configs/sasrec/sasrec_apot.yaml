@@ -1,0 +1,13 @@
+base_config: base.yaml
+experiment:
+  run_name: sasrec_apot
+
+quantization:
+  method: apot
+  bits: 8
+  activation_bits: 8
+  per_channel: false
+  symmetric: true
+  apot_m: 2
+  apot_k: 4
+

@@ -1,0 +1,14 @@
+base_config: base.yaml
+
+experiment:
+  name: sasrec_lsq
+  run_name: sasrec_lsq_run
+
+quantization:
+  method: lsq
+  bits: 4
+  activation_bits: 4
+  per_channel: true
+  symmetric: true
+  quantize_embedding: true
+

@@ -1,0 +1,12 @@
+base_config: base.yaml
+experiment:
+  run_name: sasrec_qdrop
+
+quantization:
+  method: qdrop
+  bits: 8
+  activation_bits: 8
+  per_channel: false
+  symmetric: true
+  qdrop_p: 0.5
+
