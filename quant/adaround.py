@@ -57,6 +57,25 @@ class AdaRoundModule(nn.Module):
         view[self.ch_axis] = -1
         return t.view(view)
 
+    # def get_quantized_weight(self, w: Tensor) -> Tensor:
+    #     if self.alpha is None or not bool(self.alpha_init):
+    #         self._init_alpha(w)
+
+    #     s_b = self._broadcast(w, self.s.to(w.device, w.dtype))
+    #     y = w / s_b
+    #     k = torch.floor(y)
+
+    #     r_soft = torch.sigmoid(self.alpha)
+    #     if (not self.training) and self.hard_round_in_eval:
+    #         r = (r_soft >= 0.5).to(w.dtype)
+    #     else:
+    #         r = r_soft
+
+    #     z = k + r
+    #     z_clamped = z.clamp(-self.Q, self.Q)
+    #     z_rounded = z_clamped.detach().round()
+    #     w_q = s_b * (z_rounded + (z_clamped - z_clamped.detach()))
+    #     return w_q
     def get_quantized_weight(self, w: Tensor) -> Tensor:
         if self.alpha is None or not bool(self.alpha_init):
             self._init_alpha(w)
@@ -66,16 +85,22 @@ class AdaRoundModule(nn.Module):
         k = torch.floor(y)
 
         r_soft = torch.sigmoid(self.alpha)
+
         if (not self.training) and self.hard_round_in_eval:
             r = (r_soft >= 0.5).to(w.dtype)
+            z = k + r
+            z = z.clamp(-self.Q, self.Q)
+            w_q = s_b * z
+            return w_q
+
         else:
             r = r_soft
-
-        z = k + r
-        z_clamped = z.clamp(-self.Q, self.Q)
-        z_rounded = z_clamped.detach().round()
-        w_q = s_b * (z_rounded + (z_clamped - z_clamped.detach()))
-        return w_q
+            z = k + r
+            z_clamped = z.clamp(-self.Q, self.Q)
+            # градиент как у identity, значение - как у округленного
+            z_rounded = z_clamped.detach().round()
+            w_q = s_b * (z_rounded + (z_clamped - z_clamped.detach()))
+            return w_q
 
     def regularization(self, lam: float = 1e-4) -> Tensor:
         if self.alpha is None:
