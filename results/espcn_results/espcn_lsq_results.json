@@ -1,0 +1,73 @@
+{
+  "run_name": "espcn_run",
+  "strategy": "lsq",
+  "test_metrics": {
+    "psnr": 23.79727167742593,
+    "ssim": 0.944761940411159
+  },
+  "config": {
+    "experiment": {
+      "name": "espcn_lsq",
+      "seed": 42,
+      "deterministic": true,
+      "device": "cuda",
+      "run_name": "espcn_run"
+    },
+    "model": {
+      "in_channels": 1,
+      "out_channels": 1,
+      "channels": 64,
+      "upscale_factor": 4
+    },
+    "training": {
+      "epochs": 30,
+      "batch_size": 16,
+      "grad_clip": 1.0,
+      "num_workers": 16,
+      "pin_memory": true
+    },
+    "optimization": {
+      "lr": 0.001
+    },
+    "paths": {
+      "checkpoints_dir": "/netapp/a.gorokhova/itmo/QAT-ESPCN-SASREC/checkpoints/espcn_run",
+      "results_dir": "./results"
+    },
+    "data": {
+      "train_dir": "data/DIV2K_train_HR",
+      "val_dirs": [
+        "data/Set5",
+        "data/Set14"
+      ],
+      "patch_size": 96,
+      "rgb_range": 1.0
+    },
+    "quantization": {
+      "method": "lsq",
+      "weight_bits": 32,
+      "act_bits": 32,
+      "bits": 8,
+      "activation_bits": 8,
+      "symmetric": true,
+      "activation_symmetric": false,
+      "per_channel": true,
+      "alpha_init": 2.0
+    },
+    "logging": {
+      "backend": "clearml",
+      "clearml": {
+        "project_name": "ESPCN-QAT",
+        "task_name": null,
+        "tags": [
+          "super-resolution",
+          "espcn"
+        ],
+        "log_images": true,
+        "log_image_interval": 5
+      }
+    },
+    "_metadata": {
+      "loaded_from": "/netapp/a.gorokhova/itmo/QAT-ESPCN-SASREC/configs/espcn/espcn_lsq.yaml"
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "run_name": "espcn_run",
+  "strategy": "apot",
+  "test_metrics": {
+    "psnr": 22.956743325505936,
+    "ssim": 0.9291334067072187
+  },
+  "config": {
+    "experiment": {
+      "name": "espcn_apot",
+      "seed": 42,
+      "deterministic": true,
+      "device": "cuda"
+    },
+    "model": {
+      "in_channels": 1,
+      "out_channels": 1,
+      "channels": 64,
+      "upscale_factor": 4
+    },
+    "training": {
+      "epochs": 30,
+      "batch_size": 16,
+      "grad_clip": 1.0,
+      "num_workers": 16,
+      "pin_memory": true
+    },
+    "optimization": {
+      "lr": 0.001
+    },
+    "paths": {
+      "checkpoints_dir": "./checkpoints",
+      "results_dir": "./results"
+    },
+    "data": {
+      "train_dir": "data/DIV2K_train_HR",
+      "val_dirs": [
+        "data/Set5",
+        "data/Set14"
+      ],
+      "patch_size": 96,
+      "rgb_range": 1.0
+    },
+    "quantization": {
+      "method": "apot",
+      "weight_bits": 32,
+      "act_bits": 32,
+      "bits": 8,
+      "activation_bits": 8,
+      "per_channel": true,
+      "apot_m": 2,
+      "apot_k": 4,
+      "use_weight_norm": true
+    },
+    "logging": {
+      "backend": "clearml",
+      "clearml": {
+        "project_name": "ESPCN-QAT",
+        "task_name": null,
+        "tags": [
+          "super-resolution",
+          "espcn"
+        ],
+        "log_images": true,
+        "log_image_interval": 5
+      }
+    },
+    "_metadata": {
+      "loaded_from": "/netapp/a.gorokhova/itmo/QAT-ESPCN-SASREC/configs/espcn/espcn_apot_v1.yaml"
+    }
+  }
+}

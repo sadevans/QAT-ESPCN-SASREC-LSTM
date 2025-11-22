@@ -12,6 +12,9 @@ echo "Using GPU: ${CUDA_VISIBLE_DEVICES}"
 echo "Training SASRec FP32..."
 python sasrec/train.py --config configs/sasrec/sasrec_fp32.yaml
 
+echo "Training SASRec AdaRound..."
+python sasrec/train.py --config configs/sasrec/sasrec_adaround.yaml
+
 echo "Training SASRec LSQ..."
 python sasrec/train.py --config configs/sasrec/sasrec_lsq.yaml
 
@@ -21,7 +24,6 @@ python sasrec/train.py --config configs/sasrec/sasrec_apot.yaml
 echo "Training SASRec QDrop..."
 python sasrec/train.py --config configs/sasrec/sasrec_qdrop.yaml
 
-echo "Training SASRec AdaRound..."
-python sasrec/train.py --config configs/sasrec/sasrec_adaround.yaml
+
 
 

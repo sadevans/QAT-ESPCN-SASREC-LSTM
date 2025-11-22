@@ -9,11 +9,11 @@ export CUDA_VISIBLE_DEVICES="${GPU_ID}"
 
 echo "Using GPU: ${CUDA_VISIBLE_DEVICES}"
 
-echo "Training ESPCN FP32..."
-python espcn/train.py --config configs/espcn/espcn_fp32.yaml
+# echo "Training ESPCN FP32..."
+# python espcn/train.py --config configs/espcn/espcn_fp32.yaml
 
-echo "Training ESPCN LSQ..."
-python espcn/train.py --config configs/espcn/espcn_lsq.yaml
+# echo "Training ESPCN LSQ..."
+# python espcn/train.py --config configs/espcn/espcn_lsq.yaml
 
 echo "Training ESPCN APoT..."
 python espcn/train.py --config configs/espcn/espcn_apot.yaml
