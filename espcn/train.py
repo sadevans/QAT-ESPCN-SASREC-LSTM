@@ -200,7 +200,7 @@ def load_checkpoint(
     if not os.path.exists(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
 
-    ckpt = torch.load(path, map_location=next(model.parameters()).device)
+    ckpt = torch.load(path, map_location=next(model.parameters()).device, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
     if "optimizer_state_dict" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
@@ -216,7 +216,7 @@ def train_fp32(
     device: torch.device,
     epochs: int,
     checkpoint_dir: str,
-    save_name: str = "espcn_fp32.pth",
+    save_name: str,
     logger=None
 ):
     """Train FP32 model."""
@@ -261,7 +261,7 @@ def train_qat(
     quant_config: Dict[str, Any],
     epochs: int,
     checkpoint_dir: str,
-    save_name: str = "espcn_qat.pth",
+    save_name: str,
     logger=None
 ):
     """Train model with quantization-aware training (QAT)."""
@@ -313,7 +313,7 @@ def apply_adaround(
     fp32_checkpoint: str,
     adaround_config: Dict[str, Any],
     checkpoint_dir: str,
-    save_name: str = "espcn_adaround.pth",
+    save_name: str,
     logger=None
 ):
     """Apply AdaRound post-training quantization."""
@@ -324,7 +324,7 @@ def apply_adaround(
         raise FileNotFoundError(f"FP32 checkpoint not found: {fp32_path}")
 
     print(f"Loading FP32 checkpoint: {fp32_checkpoint}")
-    fp32_state = torch.load(fp32_path, map_location=device)["model_state_dict"]
+    fp32_state = torch.load(fp32_path, map_location=device, weights_only=False)["model_state_dict"]
     model.load_state_dict(fp32_state, strict=True)
 
     model.prepare_quant("adaround", adaround_config)
@@ -354,6 +354,8 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging()
+    config_path = Path(args.config)
+    config_stem = config_path.stem
     config = load_config(args.config)
     set_random_seeds(config["experiment"].get("seed", 42))
 
@@ -369,8 +371,10 @@ def main() -> None:
     if strategy_name in ("none", "fp32"):
         strategy_name = "fp32"
 
-    checkpoint_dir = Path(config.get("paths", {}).get("checkpoints_dir", "./checkpoints"))
+    checkpoint_dir = Path("/netapp/a.gorokhova/itmo/QAT-ESPCN-SASREC/checkpoints/espcn_run")
     run_name = config["experiment"].get("run_name", "espcn_run")
+    config["experiment"]["run_name"] = run_name
+    config.setdefault("paths", {})["checkpoints_dir"] = str(checkpoint_dir)
 
     logging_cfg = config.get("logging", {})
     clearml_task = init_clearml_task(logging_cfg, config)
@@ -378,8 +382,7 @@ def main() -> None:
 
     criterion = nn.L1Loss()
 
-    checkpoint_subdir = checkpoint_dir / run_name
-    checkpoint_subdir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     if strategy_name == "fp32":
         train_fp32(
@@ -390,7 +393,7 @@ def main() -> None:
             criterion=criterion,
             device=device,
             epochs=config["training"]["epochs"],
-            checkpoint_dir=str(checkpoint_subdir),
+            checkpoint_dir=str(checkpoint_dir),
             save_name="espcn_fp32.pth",
             logger=logger
         )
@@ -406,7 +409,7 @@ def main() -> None:
             strategy_name=strategy_name,
             quant_config=quant_cfg,
             epochs=config["training"]["epochs"],
-            checkpoint_dir=str(checkpoint_subdir),
+            checkpoint_dir=str(checkpoint_dir),
             save_name=f"espcn_{strategy_name}.pth",
             logger=logger
         )
@@ -424,7 +427,7 @@ def main() -> None:
                 criterion=criterion,
                 device=device,
                 epochs=fp32_epochs,
-                checkpoint_dir=str(checkpoint_subdir),
+                checkpoint_dir=str(checkpoint_dir),
                 save_name="espcn_fp32_for_adaround.pth",
                 logger=logger
             )
@@ -444,7 +447,7 @@ def main() -> None:
             device=device,
             fp32_checkpoint=fp32_ckpt_name,
             adaround_config=quant_cfg,
-            checkpoint_dir=str(checkpoint_subdir),
+            checkpoint_dir=str(checkpoint_dir),
             save_name="espcn_adaround.pth",
             logger=logger
         )

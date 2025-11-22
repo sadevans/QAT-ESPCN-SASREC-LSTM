@@ -63,3 +63,38 @@ class QuantESPCN(BaseESPCN):
     def state_dict(self, *args, **kwargs):
         # return base model state - quantization parameters are included in the model
         return super().state_dict(*args, **kwargs)
+    
+    def convert_quantized_weights_to_static(self) -> None:
+        """
+        Replace all quantized convolution layers with standard nn.Conv2d
+        containing the final quantized weights.
+        This removes FakeQuantizer logic and makes the model exportable.
+        """
+        from quant.base import QuantConv2d
+
+        def replace_fn(name: str, module: nn.Module) -> Optional[nn.Module]:
+            if isinstance(module, QuantConv2d):
+                with torch.no_grad():
+                    weight_q = module.weight_quantizer(module.weight)
+                    new_conv = nn.Conv2d(
+                        in_channels=module.in_channels,
+                        out_channels=module.out_channels,
+                        kernel_size=module.kernel_size,
+                        stride=module.stride,
+                        padding=module.padding,
+                        dilation=module.dilation,
+                        groups=module.groups,
+                        bias=module.bias is not None,
+                        padding_mode=module.padding_mode,
+                    )
+                    new_conv.weight.data.copy_(weight_q)
+                    if module.bias is not None:
+                        new_conv.bias.data.copy_(module.bias.data)
+                    return new_conv
+            return None
+
+        from utils import replace_module
+        for name, module in list(self.named_modules()):
+            new_module = replace_fn(name, module)
+            if new_module is not None:
+                replace_module(self, name, new_module)

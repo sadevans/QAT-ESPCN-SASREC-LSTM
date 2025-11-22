@@ -35,7 +35,8 @@ class DIV2KTrainDataset(Dataset):
         return len(self.hr_files)
 
     def __getitem__(self, idx):
-        hr = Image.open(self.hr_files[idx]).convert("RGB")
+        hr = Image.open(self.hr_files[idx]).convert("L")
+
         w, h = hr.size
 
         # Upsample small images
@@ -70,12 +71,13 @@ class SRBenchmarkDataset(Dataset):
 
     def __init__(self, hr_dir, upscale_factor=4, rgb_range=1.0):
         hr_dir = Path(hr_dir)
+        hr_dir = hr_dir / f'image_SRF_{int(upscale_factor)}'
         if not hr_dir.exists():
             raise FileNotFoundError(f"HR directory does not exist: {hr_dir}")
 
         # Поддерживаем любые изображения как HR (имена не важны)
         self.hr_files = sorted(
-            p for ext in ("*.png", "*.jpg", "*.jpeg")
+            p for ext in ("*HR.png", "*HR.jpg", "*HR.jpeg")
             for p in hr_dir.rglob(ext)
         )
         if not self.hr_files:
@@ -90,23 +92,52 @@ class SRBenchmarkDataset(Dataset):
 
     def __getitem__(self, idx):
         hr_path = self.hr_files[idx]
-        hr = Image.open(hr_path).convert("RGB")
+        hr = Image.open(hr_path).convert("L")
         name = hr_path.stem
 
+        base_name = name.replace("_HR", "")
+        lr_name = base_name + "_LR.png"
+
+        lr_path = hr_path.parent / lr_name
+        lr = Image.open(lr_path).convert("L")
+
+        # lr = Image.open(self.hr_files[idx].replace('HR', 'LR')).convert("L")
+
+        w_lr, h_lr = lr.size
+        w_hr_target = w_lr * self.upscale_factor
+        h_hr_target = h_lr * self.upscale_factor
+        w_hr, h_hr = hr.size
+
+        if w_hr != w_hr_target or h_hr != h_hr_target:
+            hr = hr.crop((0, 0, w_hr_target, h_hr_target))
+
         hr_tensor = self.to_tensor(hr) * self.rgb_range
-        _, h_hr, w_hr = hr_tensor.shape
+        lr_tensor = self.to_tensor(lr) * self.rgb_range
 
-        h_lr = h_hr // self.upscale_factor
-        w_lr = w_hr // self.upscale_factor
+        hr_tensor = hr_tensor.clamp(0.0, self.rgb_range)
+        lr_tensor = lr_tensor.clamp(0.0, self.rgb_range)
 
-        hr_tensor = hr_tensor[:, :h_lr * self.upscale_factor, :w_lr * self.upscale_factor]
 
-        lr_tensor = torch.nn.functional.interpolate(
-            hr_tensor.unsqueeze(0),
-            size=(h_lr, w_lr),
-            mode='bicubic',
-            align_corners=False,
-            antialias=True
-        ).squeeze(0).clamp(0.0, self.rgb_range)
+        # hr_path = self.hr_files[idx]
+        # # hr = Image.open(hr_path).convert("RGB")
+        # hr = Image.open(hr_path).convert("L")
+
+        # name = hr_path.stem
+
+        # hr_tensor = self.to_tensor(hr) * self.rgb_range
+        # _, h_hr, w_hr = hr_tensor.shape
+
+        # h_lr = h_hr // self.upscale_factor
+        # w_lr = w_hr // self.upscale_factor
+
+        # hr_tensor = hr_tensor[:, :h_lr * self.upscale_factor, :w_lr * self.upscale_factor]
+
+        # lr_tensor = torch.nn.functional.interpolate(
+        #     hr_tensor.unsqueeze(0),
+        #     size=(h_lr, w_lr),
+        #     mode='bicubic',
+        #     align_corners=False,
+        #     antialias=True
+        # ).squeeze(0).clamp(0.0, self.rgb_range)
 
         return {"lr": lr_tensor, "hr": hr_tensor, "name": name}

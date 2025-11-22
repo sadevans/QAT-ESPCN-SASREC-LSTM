@@ -6,23 +6,29 @@ ESPCN: супер-разрешение с квантованием
 - FP32 обучение (базовая модель)
 - QAT: LSQ, APoT, QDrop
 - PTQ: AdaRound
-- бенчмаркинг качества и производительности
-- визуализация влияния квантования на веса и активации
+- бенчмарк качества и производительности
 
 Структура
 ---------
 
 ```
 espcn/
-  train.py               # обучение FP32, QAT и AdaRound
-  benchmark_quant.py     # бенчмарк всех методов квантизации
-  plot_quant_analysis.py # построение графиков и анализ весов/активаций
+  train.py                   # обучение FP32, QAT и AdaRound
+  benchmark_quant.py         # бенчмарк PyTorch-чекпоинтов (PSNR/latency/size)
+  benchmark_onnx_int8.py     # бенчмарк готовых ONNX моделей (FP32/INT8)
+  convert_to_int8_onnx.py    # экспорт PyTorch чекпоинта в ONNX + динамическое INT8
+  aggregate_benchmark_md.py  # агрегация результатов в Markdown-таблицы
   data/
     dataloaders.py
     datasets.py
   model/
-    base.py              # базовая архитектура ESPCN
-    quant.py             # оболочка QuantESPCN с поддержкой стратегий quant/
+    base.py                  # базовая архитектура ESPCN
+    quant.py                 # QuantESPCN + интеграция стратегий quant/
+
+scripts/
+  run_espcn_train.sh         # пакетное обучение FP32 + всех квантованных версий
+  run_espcn_benchmark.sh     # последовательный запуск PyTorch-бенчмарков
+  run_espcn_plots.sh         # построение трейдофф-графиков и распределений
 ```
 
 Данные
@@ -32,8 +38,7 @@ espcn/
 
 - **Обучение**: `DIV2K_train_HR` (путь задаётся в `configs/espcn/base.yaml` как `data.train_dir`),  
   из полноразмерных HR‑изображений генерируются LR‑патчи с бикубической деградацией (см. `DIV2KTrainDataset`).
-- **Валидация и тест**: наборы эталонных изображений `Set5` и `Set14` (пути в `data.val_dirs`),  
-  для них также строятся LR‑версии (`SRBenchmarkDataset`), а качество измеряется по PSNR/SSIM на HR.
+- **Валидация и тест**: наборы эталонных изображений `Set5` и `Set14` (пути в `data.val_dirs`),  качество измеряется по PSNR/SSIM на HR.
 
 Конфиги
 -------
@@ -76,6 +81,19 @@ AdaRound (PTQ):
 CUDA_VISIBLE_DEVICES=0 python espcn/train.py --config configs/espcn/espcn_adaround.yaml
 ```
 
+Автоматизированный запуск:
+
+```bash
+# Обучение FP32 + все методы квантования
+bash scripts/run_espcn_train.sh
+
+# Бенчмарк качества/производительности
+bash scripts/run_espcn_benchmark.sh
+
+# Построение графиков и распределений
+bash scripts/run_espcn_plots.sh
+```
+
 Чекпоинты и результаты
 ----------------------
 
@@ -85,7 +103,7 @@ CUDA_VISIBLE_DEVICES=0 python espcn/train.py --config configs/espcn/espcn_adarou
   - `espcn_apot.pth`
   - `espcn_qdrop.pth`
   - `espcn_adaround.pth`
-- Финальные метрики теста: `results/espcn_run_results.json`
+- Тестовые метрики и полный конфиг каждого запуска: `results/espcn_results/<config>_results.json`
 
 Логирование в ClearML
 ---------------------
@@ -153,4 +171,67 @@ PYTHONPATH=. python espcn/plot_quant_analysis.py \
 
 После этого в `results/plots_espcn/` будут лежать PNG‑графики с трейдоффами по качеству/скорости и распределениями весов/активаций.
 
+
+ONNX / INT8 бенчмарк
+--------------------
+
+`espcn/onnx_int8_benchmark.py` экспортирует выбранный чекпоинт в ONNX, применяет динамическую INT8‑квантование через ONNX Runtime и измеряет PSNR/SSIM и латентность на CPU:
+
+```bash
+PYTHONPATH=. python espcn/onnx_int8_benchmark.py \
+  --checkpoint checkpoints/espcn_run/espcn_adaround.pth \
+  --base-config configs/espcn/espcn_adaround.yaml \
+  --onnx-fp32 onnx/espcn_fp32.onnx \
+  --onnx-int8 onnx/espcn_int8.onnx \
+  --results-out results/espcn_int8_report.json
+```
+
+Скрипт выполняет последовательность операций FP32 → ONNX → ONNX INT8, оценивает качество и производительность на CPU и сохраняет отчёт с метриками/латентностью/размером моделей.
+
+**Известные ограничения экспорта:** PyTorch ≥2.1 по умолчанию использует новый экспорт через `torch.export`. Если во время экспорта возникает ошибка `GuardOnDataDependentSymNode` (обычно в `quant/adaround.py` при проверке `bool(alpha_init)`), можно воспользоваться одним из вариантов:
+
+- до вызова `torch.onnx.export` задать `torch._dynamo.config.suppress_errors = True` (см. рекомендации PyTorch);
+- переключиться на классический экспортатор (`TORCH_ONNX_EXPERIMENTAL_EXPORTER=0`) или использовать PyTorch 2.1/2.2;
+- экспортировать FP32 чекпоинт (без AdaRound) и применять INT8‑квантование средствами ONNX Runtime уже после экспорта.
+
+После успешного запуска в `results/espcn_int8_report.json` появится сравнительный отчёт FP32 vs INT8 (PSNR, SSIM, latency, throughput, размер ONNX файлов).
+
+
+Итоги бенчмарка
+---------------
+
+| Метод    | PSNR (dB) | SSIM   | Throughput (img/s, CPU) | Avg latency (ms) | Размер (MB) |
+|----------|-----------|--------|-------------------------|------------------|-------------|
+| FP32     | 24.84     | 0.9541 | 65.95                   | 15.16            | 0.29        |
+| LSQ      | 21.27     | 0.9090 | 41.41                   | 24.15            | 0.30        |
+| APoT     | 22.48     | 0.92 | 35.98                   | 27.79            | 0.29        |
+| QDrop    | 24.45     | 0.9502 | 35.33                   | 28.30            | 0.30        |
+| AdaRound | 24.83     | 0.9541 | 64.99                   | 15.39            | 0.20        |
+
+**Лучший баланс даёт AdaRound**: он сохраняет PSNR/SSIM на уровне FP32 (разница <0.01 дБ / <0.0001), немного уменьшает размер чекпоинта (~0.20 MB против 0.29 MB) и практически не проигрывает в latency на CPU. QDrop близок по качеству, но почти вдвое медленнее; LSQ и APoT требуют дополнительного тюнинга или лучшей настройки параметров, поскольку снижают PSNR. Поэтому для продакшен‑инференса на CPU рекомендуется связка FP32→AdaRound→ONNX INT8.
+
+`results/espcn_quant_benchmark.md` содержит агрегированную Markdown‑таблицу, сформированную скриптом:
+
+```bash
+PYTHONPATH=. python espcn/aggregate_benchmark_md.py \
+  --input results/espcn_quant_benchmark.json \
+  --output results/espcn_quant_benchmark.md
+```
+
+ONNX INT8 результаты
+--------------------
+
+| Модель | PSNR (dB) | Avg latency (ms) | Throughput (fps) | Размер (MB) |
+|--------|-----------|------------------|------------------|-------------|
+| FP32   | 24.8445   | 8.68             | 115.16           | 0.0117      |
+| INT8   | 24.8428   | 8.72             | 114.67           | 0.0118      |
+
+Выводы
+------
+
+- **LSQ** демонстрирует устойчивую скорость, но на текущих настройках теряет ≈3.6 dB и 0.045 SSIM, поэтому нуждается в лучшем подборе параметров (регуляризация, контроль scale_param)
+- **APoT** в приведённой конфигурации деградирует сильнее остальных (PSNR ≈22.5 dB);
+- **QDrop** почти не уступает FP32 по качеству (24.45 dB / 0.9502 SSIM), однако платит за это увеличением латентности (≈28 мс на CPU). Подходит, если приоритет — качество, а время работы не критично.
+- **AdaRound** обеспечивает лучший баланс (24.83 dB / 0.9541 SSIM при 15.39 мс и размере чекпоинта ~0.20 MB) и выбран в качестве основного PTQ-варианта для CPU-инференса.
+- Экспорт AdaRound в ONNX и динамическое INT8-квантование практически не меняют поведение модели: FP32 ONNX даёт 24.844 dB при 8.68 мс, INT8 ONNX — 24.843 dB при 8.72 мс, throughput отличаются менее чем на 0.5 fps.
 

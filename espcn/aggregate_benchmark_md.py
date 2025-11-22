@@ -63,6 +63,7 @@ def main() -> None:
     md = to_markdown(records)
 
     out_path = Path(args.output)
+    print(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md)
 

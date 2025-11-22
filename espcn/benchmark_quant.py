@@ -4,7 +4,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import torch
 from torch import nn
@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from espcn.data.dataloaders import get_val_loaders
 from espcn.model.quant import QuantESPCN
-from utils import load_config, ensure_dir
+from utils import load_config, ensure_dir, get_espcn_method_configs
 
 
 def build_model(config: Dict[str, Any]) -> nn.Module:
@@ -99,12 +99,76 @@ def load_model_from_checkpoint(
     config: Dict[str, Any],
     ckpt_path: Path,
     device: torch.device,
+    method: str = "fp32",
+    quant_config: Optional[Dict[str, Any]] = None,
 ) -> nn.Module:
     model = build_model(config)
-    state = torch.load(ckpt_path, map_location=device)
-    if "model_state_dict" in state:
-        state = state["model_state_dict"]
-    model.load_state_dict(state, strict=True)
+    raw_state = torch.load(ckpt_path, map_location=device, weights_only=False)
+    if "model_state_dict" in raw_state:
+        state_dict = raw_state["model_state_dict"]
+    else:
+        state_dict = raw_state
+
+    method = method.lower()
+
+    if method in ("lsq", "apot", "qdrop"):
+        if quant_config is None:
+            raise ValueError(f"quant_config must be provided for QAT method '{method}'.")
+        model.prepare_quant(method, quant_config)
+
+        print("Modules after attach:")
+        for name, _ in model.named_modules():
+            if "quantizer" in name:
+                print("  ", name)
+
+        raw_state = torch.load(ckpt_path, map_location="cpu")
+        if "model_state_dict" in raw_state:
+            state_dict = raw_state["model_state_dict"]
+        else:
+            state_dict = raw_state
+
+        print("\nKeys in checkpoint with 'quantizer':")
+        for k in state_dict.keys():
+            if "quantizer" in k:
+                print("  ", k)
+        
+    elif method == "adaround":
+        if quant_config is None and isinstance(raw_state, dict):
+            quant_config = raw_state.get("config", {})
+        if quant_config is None:
+            raise ValueError("AdaRound checkpoint does not contain 'config' field for quantization.")
+        model.prepare_quant("adaround", quant_config)
+        from quant.adaround import AdaRoundModule
+        adapted_state_dict = {}
+        for k, v in state_dict.items():
+            if ("running_min" in k or "running_max" in k) and v.dim() == 0:
+                adapted_state_dict[k] = v.reshape(1)
+            else:
+                adapted_state_dict[k] = v
+        for name, module in model.named_modules():
+            if isinstance(module, AdaRoundModule) and getattr(module, "alpha", None) is None:
+                alpha_key = f"{name}.alpha"
+                if alpha_key in adapted_state_dict:
+                    loaded_alpha = adapted_state_dict[alpha_key]
+                    module.alpha = nn.Parameter(loaded_alpha.clone().detach())
+                    module.register_parameter("alpha", module.alpha)
+                    module.alpha_init.fill_(True)
+                else:
+                    module._init_alpha(module.weight)
+
+        model.load_state_dict(adapted_state_dict, strict=True)
+        model.to(device)
+        return model
+
+    adapted_state_dict = {}
+    for k, v in state_dict.items():
+        if ("running_min" in k or "running_max" in k) and v.dim() == 0:
+            # преобразуем скаляр ([]) → вектор длины 1 ([1])
+            adapted_state_dict[k] = v.reshape(1)
+        else:
+            adapted_state_dict[k] = v
+
+    model.load_state_dict(adapted_state_dict, strict=True)
     model.to(device)
     return model
 
@@ -141,33 +205,50 @@ def main() -> None:
 
     ckpt_dir = Path(args.checkpoint_dir)
 
-    methods = {
-        "fp32": ckpt_dir / "espcn_fp32.pth",
-        "lsq": ckpt_dir / "espcn_lsq.pth",
-        "apot": ckpt_dir / "espcn_apot.pth",
-        "qdrop": ckpt_dir / "espcn_qdrop.pth",
-        "adaround": ckpt_dir / "espcn_adaround.pth",
-    }
+    method_configs = get_espcn_method_configs()
+
+    qat_configs: Dict[str, Dict[str, Any]] = {}
+    for m in ("lsq", "apot", "qdrop"):
+        cfg_path = Path(f"configs/espcn/espcn_{m}.yaml")
+        if cfg_path.exists():
+            qat_configs[m] = load_config(str(cfg_path))
 
     records: List[Dict[str, Any]] = []
 
-    for name, ckpt_path in methods.items():
+    for method_name, (method_config, ckpt_name) in method_configs.items():
+        method_cfg_path = Path(method_config)
+        if not method_cfg_path.exists():
+            print(f"[warn] config for {method_name} not found: {method_cfg_path}, skipping.")
+            continue
+        method_full_cfg = load_config(str(method_cfg_path))
+        ckpt_path = ckpt_dir / ckpt_name
+
         if not ckpt_path.exists():
-            print(f"[warn] checkpoint for {name} not found: {ckpt_path}, skipping.")
+            print(f"[warn] checkpoint for {method_name} not found: {ckpt_path}, skipping.")
             continue
 
-        print(f"\n=== Benchmarking {name.upper()} ===")
-        model = load_model_from_checkpoint(base_config, ckpt_path, device)
+        print(f"\n=== Benchmarking {method_name.upper()} ===")
+        quant_cfg = None
+        if method_name in ("lsq", "apot", "qdrop"):
+            quant_cfg = method_full_cfg.get("quantization", {})
+
+        model = load_model_from_checkpoint(
+            base_config,
+            ckpt_path,
+            device,
+            method=method_name,
+            quant_config=quant_cfg,
+        )
 
         psnr, ssim = eval_psnr_ssim(model, val_loader, device)
-        print(f"{name}: PSNR={psnr:.4f} dB | SSIM={ssim:.4f}")
+        print(f"{method_name}: PSNR={psnr:.4f} dB | SSIM={ssim:.4f}")
 
         cpu_metrics = benchmark_cpu_latency(model, val_loader)
         size_mb = model_size_mb(ckpt_path)
 
         rec = {
-            "model": f"espcn_{name}",
-            "quant_method": name,
+            "model": method_cfg_path.stem,
+            "quant_method": method_name,
             "psnr_y": psnr,
             "ssim": ssim,
             "throughput_samples_per_sec": cpu_metrics["throughput_samples_per_sec"],
