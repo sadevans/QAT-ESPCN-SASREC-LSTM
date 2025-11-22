@@ -1,0 +1,35 @@
+[
+  {
+    "model": "sasrec_fp32",
+    "quant_method": "fp32",
+    "ndcg_val": 0.27405171768351894,
+    "hit_val": 0.49321192052980134,
+    "throughput_samples_per_sec": 1.7590017409426708,
+    "avg_latency_ms": 568.5042696228871,
+    "median_latency_ms": 696.8279210850596,
+    "checkpoint_path": "checkpoints/sasrec_runs/sasrec_fp32/sasrec_fp32.pth",
+    "model_size_mb": 3.5447912216186523
+  },
+  {
+    "model": "sasrec_lsq",
+    "quant_method": "lsq",
+    "ndcg_val": 0.09650250111037458,
+    "hit_val": 0.19337748344370861,
+    "throughput_samples_per_sec": 1.1940872430250316,
+    "avg_latency_ms": 837.4597466317937,
+    "median_latency_ms": 1100.8708635345101,
+    "checkpoint_path": "checkpoints/sasrec_runs/sasrec_lsq/sasrec_lsq.pth",
+    "model_size_mb": 3.5724496841430664
+  },
+  {
+    "model": "sasrec_apot",
+    "quant_method": "apot",
+    "ndcg_val": 0.2705507081404448,
+    "hit_val": 0.4860927152317881,
+    "throughput_samples_per_sec": 0.6824085055241516,
+    "avg_latency_ms": 1465.3979132805641,
+    "median_latency_ms": 1856.3064532354474,
+    "checkpoint_path": "checkpoints/sasrec_runs/sasrec_apot/sasrec_apot.pth",
+    "model_size_mb": 0.0
+  }
+]
