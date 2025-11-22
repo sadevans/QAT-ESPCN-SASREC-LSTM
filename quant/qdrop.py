@@ -11,8 +11,6 @@ from .base import FakeQuantizer, QATQuantStrategy, UniformAffineQuantizer
 
 
 class QDropQuantizer(FakeQuantizer):
-    """Wrapper that randomly bypasses fake quantization during training."""
-
     def __init__(self, inner: FakeQuantizer, drop_prob: float) -> None:
         super().__init__(
             bits=inner.bits,
@@ -35,8 +33,6 @@ class QDropQuantizer(FakeQuantizer):
 
 
 class QDropQuantStrategy(QATQuantStrategy):
-    """Apply QDrop stochastic bypass to activation quantizers."""
-
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self.drop_prob = float(config.get("qdrop_p", 0.2))

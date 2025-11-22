@@ -22,10 +22,11 @@ class AdaRoundModule(nn.Module):
         self.per_channel = per_channel
         self.ch_axis = ch_axis
         
-        self.alpha: Optional[nn.Parameter] = None
+        # self.alpha: Optional[nn.Parameter] = None
         self.register_buffer("s", torch.zeros(1))
         self.register_buffer("initialized", torch.tensor(False))
         self.register_buffer("alpha_init", torch.tensor(False))
+        self.register_parameter("alpha", None)
         self.hard_round_in_eval = True
 
     @torch.no_grad()
@@ -85,6 +86,17 @@ class AdaRoundModule(nn.Module):
 
     def set_hard_round(self, hard: bool = True) -> None:
         self.hard_round_in_eval = hard
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        """
+        Ensure alpha parameter exists before loading checkpoint weights.
+        """
+        if "alpha" in state_dict and self.alpha is None:
+            loaded_alpha = state_dict["alpha"]
+            self.alpha = nn.Parameter(loaded_alpha.clone().detach())
+            self.register_parameter("alpha", self.alpha)
+            self.alpha_init.fill_(True)
+        return super().load_state_dict(state_dict, strict)
 
 
 class AdaRoundConv2d(nn.Conv2d, AdaRoundModule):
@@ -227,7 +239,7 @@ class AdaRoundQuantStrategy(QuantStrategy):
                 iterator = iter(loader)
                 batch = next(iterator)
 
-            batch = move_batch_to_device(batch, device)
+            batch = _move_batch_like(batch, device)
             
             if isinstance(batch, dict):
                 if "input" in batch:
@@ -235,20 +247,20 @@ class AdaRoundQuantStrategy(QuantStrategy):
                 elif "lr" in batch:
                     inputs = batch["lr"]
                 else:
-                     raise KeyError("Batch dict must contain 'input' or 'lr'")
+
+
+                    raise KeyError("Batch dict must contain 'input' or 'lr'")
             else:
-                 inputs = batch
+                if isinstance(batch, (list, tuple)):
+                    inputs = tuple(batch)
+                else:
+                    inputs = (batch,)
 
             optimizer.zero_grad()
             
-            if isinstance(inputs, (tuple, list)):
-                with torch.no_grad():
-                    target = self.reference_model(*inputs)
-                output = self.model(*inputs)
-            else:
-                with torch.no_grad():
-                    target = self.reference_model(inputs)
-                output = self.model(inputs)
+            with torch.no_grad():
+                target = self.reference_model(*inputs)
+            output = self.model(*inputs)
             
             if isinstance(target, (tuple, list)):
                 mse_loss = 0.0
@@ -278,3 +290,13 @@ class AdaRoundQuantStrategy(QuantStrategy):
 
     def step(self) -> None:
         pass
+
+
+def _move_batch_like(batch, device):
+    if isinstance(batch, dict):
+        return {k: _move_batch_like(v, device) for k, v in batch.items()}
+    if isinstance(batch, (list, tuple)):
+        return type(batch)(_move_batch_like(v, device) for v in batch)
+    if torch.is_tensor(batch):
+        return batch.to(device)
+    return batch

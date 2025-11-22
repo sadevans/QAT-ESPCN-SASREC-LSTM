@@ -8,8 +8,6 @@ from .base import LearnableStepSizeQuantizer, QATQuantStrategy
 
 
 class LSQQuantStrategy(QATQuantStrategy):
-    """Learned Step Size Quantization (LSQ) with learnable step sizes."""
-
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
         self.alpha_init = config.get("alpha_init", 1.0)
